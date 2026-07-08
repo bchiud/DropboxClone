@@ -1,5 +1,4 @@
 import datetime
-from typing import Iterator
 
 from app.domain import chunker
 from app.ports.block_store import BlockStore
