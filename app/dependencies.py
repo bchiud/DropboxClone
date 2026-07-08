@@ -6,10 +6,19 @@ from pymongo import MongoClient
 
 from app.adapters.b2_block_store import B2BlockStore
 from app.adapters.mongo_file_repository import MongoFileRepository
+from app.adapters.mongo_user_repository import MongoUserRepository
+from app.application.auth_service import AuthService
+from app.application.file_service import FileService
 from app.config import settings
-from app.domain.services import FileService
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
+from app.ports.user_repository import UserRepository
+
+
+@lru_cache
+def _get_database():
+    client = MongoClient(host=settings.mongodb_uri, tlsCAFile=certifi.where())
+    return client[settings.mongodb_db]
 
 
 @lru_cache
@@ -25,11 +34,18 @@ def get_block_store() -> BlockStore:
 
 @lru_cache
 def get_file_repository() -> FileRepository:
-    client = MongoClient(
-        host=settings.mongodb_uri,
-        tlsCAFile=certifi.where(),
+    return MongoFileRepository(_get_database()["files"])
+
+
+@lru_cache
+def get_user_repository() -> UserRepository:
+    return MongoUserRepository(_get_database()["users"])
+
+
+def get_auth_service() -> AuthService:
+    return AuthService(
+        user_repository=get_user_repository(),
     )
-    return MongoFileRepository(client[settings.mongodb_db]["files"])
 
 
 def get_file_service() -> FileService:

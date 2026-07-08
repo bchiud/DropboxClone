@@ -1,8 +1,10 @@
+bcrypt==4.2.1
 boto3==1.35.90
 certifi==2024.12.14
 fastapi==0.115.6
 pydantic==2.10.4
 pydantic-settings==2.7.1
+PyJWT==2.10.1
 pymongo==4.10.1
 python-dotenv==1.0.1
 python-multipart==0.0.20
