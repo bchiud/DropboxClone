@@ -10,3 +10,4 @@ python-dotenv==1.0.1
 python-multipart==0.0.20
 uvicorn[standard]==0.34.0
 watchdog==6.0.0
+websockets==16.0

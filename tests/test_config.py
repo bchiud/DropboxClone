@@ -26,7 +26,8 @@ def test_defaults_applied():
     s = Settings(_env_file=None, **REQUIRED)
     assert s.mongodb_db == "dropbox_clone"
     assert s.s3_bucket == "dropbox-clone"
-    assert s.block_size == 4 * 1024 * 1024
+    assert s.jwt_algorithm == "HS256"
+    assert s.access_token_expire_minutes == 60
 
 
 @pytest.mark.parametrize("missing", sorted(REQUIRED))
@@ -43,10 +44,10 @@ def test_jwt_secret_has_no_default():
         Settings(_env_file=None, **partial)
 
 
-def test_block_size_coerced_to_int():
-    s = Settings(_env_file=None, **{**REQUIRED, "block_size": "1024"})
-    assert s.block_size == 1024
-    assert isinstance(s.block_size, int)
+def test_expiry_coerced_to_int():
+    s = Settings(_env_file=None, **{**REQUIRED, "access_token_expire_minutes": "30"})
+    assert s.access_token_expire_minutes == 30
+    assert isinstance(s.access_token_expire_minutes, int)
 
 
 def test_extra_env_vars_ignored():

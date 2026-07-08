@@ -4,13 +4,14 @@ Usage:
     python -m client --username U --password P --folder ~/Dropbox [--server URL] [--once]
 """
 import argparse
-import time
+import asyncio
 from pathlib import Path
 
 from client.api_client import ApiClient
 from client.state import LocalIndex
 from client.sync import SyncEngine
 from client.watcher import watch
+from client.ws_listener import listen
 
 
 def build_engine(base_url: str, username: str, password: str, folder: Path) -> tuple[SyncEngine, ApiClient]:
@@ -28,7 +29,6 @@ def main(argv=None):
     parser.add_argument("--password", required=True)
     parser.add_argument("--folder", required=True, type=Path)
     parser.add_argument("--once", action="store_true", help="sync once and exit")
-    parser.add_argument("--poll", type=float, default=10.0, help="pull interval seconds")
     args = parser.parse_args(argv)
 
     engine, api = build_engine(args.server, args.username, args.password, args.folder)
@@ -38,15 +38,14 @@ def main(argv=None):
         api.close()
         return
 
+    # push on local changes (watchdog thread) + pull on server notifications (WebSocket)
     observer = watch(engine, args.folder)
-    print(f"watching {args.folder} — Ctrl-C to stop")
+    print(f"watching {args.folder} + real-time listening — Ctrl-C to stop")
     try:
-        while True:
-            time.sleep(args.poll)
-            pulled = engine.pull()
-            if pulled:
-                print(f"pulled: {pulled}")
+        asyncio.run(listen(args.server, api._token, engine))
     except KeyboardInterrupt:
+        pass
+    finally:
         observer.stop()
         observer.join()
         api.close()

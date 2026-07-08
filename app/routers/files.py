@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.application.file_service import FileService, MissingBlocks
 from app.auth_dependencies import get_current_user
-from app.dependencies import get_file_service
+from app.dependencies import get_connection_manager, get_file_service
 from app.models.file import CommitFileRequest, FileRecord
+from app.realtime import ConnectionManager
 
 router = APIRouter(
     prefix="/files",
@@ -20,10 +21,11 @@ def list_files(
 
 
 @router.post("/commit", status_code=status.HTTP_201_CREATED)
-def commit(
+async def commit(
         body: CommitFileRequest,
         fileService: FileService = Depends(get_file_service),
         current_user: str = Depends(get_current_user),
+        connectionManager: ConnectionManager = Depends(get_connection_manager),
 ) -> dict:
     try:
         fileRecord: FileRecord = fileService.commit_file(
@@ -34,6 +36,8 @@ def commit(
         )
     except MissingBlocks as mb:
         raise HTTPException(status_code=409, detail={"missing": mb.hashes})
+    
+    await connectionManager.notify(current_user)
     return {
         "path": fileRecord.path,
         "size": fileRecord.size,

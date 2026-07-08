@@ -260,7 +260,6 @@ S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION, S3_BUCKET
 JWT_SECRET                        # required; generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
 JWT_ALGORITHM=HS256               # optional
 ACCESS_TOKEN_EXPIRE_MINUTES=60    # optional
-BLOCK_SIZE=4194304                # optional (4 MiB)
 ```
 
 > **macOS note:** MongoDB Atlas TLS requires `certifi` (`tlsCAFile=certifi.where()`),
@@ -341,15 +340,18 @@ HTTP are mocked or faked, so the suite runs offline and deterministically.
 
 **Done:** content-addressed storage, chunking/dedup, REST API, JWT auth, full
 ports/adapters architecture, sync client (folder watcher + push/pull),
-**delta sync** (client-side chunking + have/need negotiation + presigned
+delta sync (client-side chunking + have/need negotiation + presigned
 direct-to-B2 transfer + per-user block scoping + re-verify-on-read),
-100% test coverage.
+**real-time sync** (WebSocket push: commit notifies the owner's devices, which
+pull instantly instead of polling), 100% test coverage.
 
 **Next:**
-- Real-time change notifications (WebSocket) — instant pulls instead of polling.
 - Sharing & permissions.
 - Web UI.
+- Pull-side delta (reuse local blocks instead of re-downloading a changed file).
+- Content-defined chunking (so delta survives insertions).
 - Streaming chunking for very large files (avoid reading whole file into memory).
+- Multi-server scaling: Redis pub/sub behind the WebSocket ConnectionManager.
 
 **Hardening backlog:** unique index on `username`, file delete + orphaned-block
 garbage collection, file versioning (conflict copies), refresh tokens,

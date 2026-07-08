@@ -76,6 +76,8 @@ class SyncEngine:
                 if local_hashes == hashes:
                     continue
 
+            # (re-)downloads whole file
+            # in ideal case, implement content-defined chunking, and pull delta blocks only
             data = self._download_blocks(hashes)
             local.parent.mkdir(parents=True, exist_ok=True)
             local.write_bytes(data)

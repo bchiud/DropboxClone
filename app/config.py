@@ -20,8 +20,5 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
-    # App
-    block_size: int = 4 * 1024 * 1024  # 4 MiB
-
 
 settings = Settings()

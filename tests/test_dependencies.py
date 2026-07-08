@@ -9,6 +9,7 @@ from app.application.file_service import FileService
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
 from app.ports.user_repository import UserRepository
+from app.realtime import ConnectionManager
 
 
 def test_block_store_is_cached_singleton():
@@ -52,3 +53,11 @@ def test_get_file_service_composes_a_service():
 def test_get_auth_service_composes_a_service():
     svc = dependencies.get_auth_service()
     assert isinstance(svc, AuthService)
+
+
+def test_connection_manager_is_cached_singleton():
+    dependencies.get_connection_manager.cache_clear()
+    a = dependencies.get_connection_manager()
+    b = dependencies.get_connection_manager()
+    assert a is b
+    assert isinstance(a, ConnectionManager)

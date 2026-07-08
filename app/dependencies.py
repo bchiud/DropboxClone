@@ -13,6 +13,7 @@ from app.config import settings
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
 from app.ports.user_repository import UserRepository
+from app.realtime import ConnectionManager
 
 
 @lru_cache
@@ -53,3 +54,7 @@ def get_file_service() -> FileService:
         block_store=get_block_store(),
         file_repository=get_file_repository(),
     )
+
+@lru_cache
+def get_connection_manager() -> ConnectionManager:
+    return ConnectionManager()
