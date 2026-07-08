@@ -1,7 +1,6 @@
 """Unit tests for the client-side chunker."""
 import hashlib
 
-from app.domain import chunker as server_chunker
 from client import chunker
 
 
@@ -35,9 +34,3 @@ def test_small_file_is_single_block():
     assert pairs[0][1] == b"hello"
 
 
-def test_agrees_with_server_chunker_on_hashes():
-    # Block identity MUST match between client and server for the same bytes.
-    data = b"the block hash is the shared contract " * 3
-    client_hashes = [h for h, _ in chunker.split(data)]
-    server_hashes = [h for h, _ in server_chunker.split(data)]
-    assert client_hashes == server_hashes

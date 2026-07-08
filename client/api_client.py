@@ -43,25 +43,6 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()["files"]
 
-    def upload(self, path: str, data: bytes) -> dict:
-        resp = self._http.post(
-            "/files",
-            params={"path": path},
-            files={"file": (path, data)},
-            headers=self._auth(),
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def download(self, path: str) -> bytes:
-        resp = self._http.get(
-            "/files/content",
-            params={"path": path},
-            headers=self._auth(),
-        )
-        resp.raise_for_status()
-        return resp.content
-
     def close(self) -> None:
         self._http.close()
 

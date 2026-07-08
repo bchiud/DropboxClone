@@ -103,16 +103,15 @@ app/
 ├── auth_dependencies.py    # get_current_user (OAuth2 bearer → username)
 │
 ├── routers/                # presentation — HTTP routes
-│   ├── files.py            #   /files  list · commit · recipe (+ legacy upload/download)
+│   ├── files.py            #   /files  list · commit · recipe
 │   ├── blocks.py           #   /blocks  missing · upload-urls · download-urls
 │   └── auth.py             #   /auth   register · login
 │
 ├── application/            # use-case orchestrators (no framework deps)
-│   ├── file_service.py     #   FileService: save/load + missing_blocks/upload_urls/commit_file/get_recipe
+│   ├── file_service.py     #   FileService: list · missing_blocks · upload_urls · commit_file · get_recipe
 │   └── auth_service.py     #   AuthService: register / authenticate
 │
 ├── domain/                 # pure logic, no I/O
-│   ├── chunker.py          #   split bytes → (hash, block) pairs
 │   └── security.py         #   bcrypt hashing + JWT encode/decode
 │
 ├── models/                 # Pydantic schemas (the "NoSQL schema")
@@ -187,13 +186,6 @@ All `/files` and `/blocks` routes require `Authorization: Bearer <token>`.
 | `GET`  | `/files/recipe?path=…` | — | `{path, size, block_hashes}` |
 | `GET`  | `/files` | — | `{files: [FileSummary]}` |
 
-**Legacy whole-file flow** (server proxies the bytes — see "Retiring the legacy API")
-
-| Method | Path | Body | Returns |
-|--------|------|------|---------|
-| `POST` | `/files?path=…` | multipart `file` | `{path, size, blocks}` |
-| `GET`  | `/files/content?path=…` | — | raw bytes |
-
 Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 
 ### Request flow — delta upload (bytes never touch the app server)
@@ -226,31 +218,6 @@ Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 - **No user enumeration:** unknown-username and wrong-password both return the
   same generic `401` on login.
 - **No hash leakage:** routes return `UserRegisterResponse`, never the `User` model.
-
----
-
-## Retiring the legacy API
-
-The whole-file endpoints (`POST /files`, `GET /files/content`) predate delta sync.
-They proxy file bytes through the app server and buffer the whole file in memory —
-superseded by the delta flow. Nothing but ad-hoc `curl` uses them now (the sync
-client is delta-only).
-
-Because this is a single codebase with one client you fully control, a clean
-**removal** is appropriate — the multi-release *deprecation* dance is for public
-APIs with external consumers you can't coordinate with. Suggested order:
-
-1. **Confirm no callers** — `grep` for `/files/content`, `POST /files` (multipart),
-   `save_file`, `load_file` across `client/` and tests.
-2. **Remove the routes** — `upload` + `download` in `routers/files.py`.
-3. **Remove the service methods** — `FileService.save_file` / `load_file`.
-4. **Drop the now-unused server chunker** — `app/domain/chunker.py` (only
-   `save_file`/`load_file` used it; the client has its own copy). Delete its tests.
-5. **Update tests** — remove the legacy route/service tests; the delta tests remain.
-6. **Update this README** — delete the "Legacy whole-file flow" table + this section.
-
-Keep them instead if you want a no-client "upload via `curl`/Swagger" path — but
-then buffer-in-memory and server-bandwidth costs are the price.
 
 ---
 
