@@ -1,7 +1,7 @@
-"""Web-layer auth dependencies.
-
-Kept separate from dependencies.py (pure composition) because these are
-HTTP-coupled: they read the Authorization header and raise HTTPException.
+"""
+web-layer auth dependencies
+separate from dependencies.py (pure composition) because these are http-coupled:
+these read the authorization header and raise httpexception
 """
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
