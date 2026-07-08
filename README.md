@@ -25,18 +25,25 @@ file bytes ──chunk──▶ [block, block, block]
                        sha256 sha256 sha256
                          ▼      ▼      ▼
    recipe:  ["3af…", "9c1…", "70b…"]     ← stored in MongoDB
-   blocks:  key=hash → bytes             ← stored in B2
+   blocks:  key=<owner>/<hash> → bytes   ← stored in B2
 ```
 
-This buys three things for free:
+This buys three things:
 
-- **Deduplication** — identical blocks (across files or users) are stored once.
-- **Delta sync** — editing part of a file only re-uploads the changed blocks.
-- **Integrity** — a block's key is a checksum of its contents.
+- **Deduplication** — identical blocks are stored once **per user** (see scoping below).
+- **Delta sync** — editing part of a file only transfers the changed blocks.
+- **Integrity** — a block's key is a checksum of its contents; readers re-verify it.
 
-> Chunking is currently **fixed-size** (like Dropbox). The `chunker.split()` seam
-> is isolated so it can be swapped for content-defined chunking (rolling hash)
-> later without touching any other layer.
+**Per-user block scoping.** Block keys are namespaced by owner (`<owner>/<hash>`),
+derived from the authenticated token — never from client input. This trades
+cross-user dedup for security: no cross-user side channel (your upload speed
+can't reveal whether *another* user has a block) and no cross-user poisoning (you
+can only write under your own namespace). It's what makes client-driven direct
+uploads safe.
+
+> Chunking is **fixed-size** (like Dropbox). The `chunker.split()` seam is isolated
+> so it can be swapped for content-defined chunking (rolling hash) without
+> touching any other layer.
 
 ---
 
@@ -96,11 +103,12 @@ app/
 ├── auth_dependencies.py    # get_current_user (OAuth2 bearer → username)
 │
 ├── routers/                # presentation — HTTP routes
-│   ├── files.py            #   /files  upload · list · download
+│   ├── files.py            #   /files  list · commit · recipe (+ legacy upload/download)
+│   ├── blocks.py           #   /blocks  missing · upload-urls · download-urls
 │   └── auth.py             #   /auth   register · login
 │
 ├── application/            # use-case orchestrators (no framework deps)
-│   ├── file_service.py     #   FileService: save_file / load_file / list_files
+│   ├── file_service.py     #   FileService: save/load + missing_blocks/upload_urls/commit_file/get_recipe
 │   └── auth_service.py     #   AuthService: register / authenticate
 │
 ├── domain/                 # pure logic, no I/O
@@ -122,9 +130,10 @@ app/
     └── mongo_user_repository.py  # UserRepository → MongoDB
 
 client/                     # the sync client — imports nothing from app/
-├── api_client.py           #   httpx wrapper over the server REST API
+├── chunker.py              #   client-side chunking (block hash = shared contract)
+├── api_client.py           #   httpx wrapper: negotiation calls + direct-to-B2 PUT/GET
 ├── state.py                #   LocalIndex: last-synced content hash per file
-├── sync.py                 #   SyncEngine: push (local→server) / pull (server→local)
+├── sync.py                 #   SyncEngine: delta push (local→server) / pull (server→local)
 ├── watcher.py              #   watchdog → auto-push on file change
 └── __main__.py             #   CLI entry point (python -m client)
 
@@ -157,34 +166,52 @@ away the (potentially huge) `block_hashes` array.
 
 ## API
 
-All `/files` routes require `Authorization: Bearer <token>`.
+All `/files` and `/blocks` routes require `Authorization: Bearer <token>`.
+`owner` is always taken from the token, never from the request.
+
+**Auth**
 
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
 | `POST` | `/auth/register` | JSON `{username, password}` | `201` `{username, created_at}` |
 | `POST` | `/auth/login` | form `username, password` | `{access_token, token_type}` |
-| `POST` | `/files?path=…` | multipart `file` | `{path, size, blocks}` |
+
+**Delta flow** (used by the sync client — file bytes go directly to/from B2)
+
+| Method | Path | Body | Returns |
+|--------|------|------|---------|
+| `POST` | `/blocks/missing` | `{hashes: [...]}` | `{missing: [...]}` — which blocks the server needs |
+| `POST` | `/blocks/upload-urls` | `{hashes: [...]}` | `{urls: {hash: presigned PUT url}}` |
+| `POST` | `/blocks/download-urls` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}` |
+| `POST` | `/files/commit` | `{path, size, block_hashes}` | `201` `{path, size, blocks}` · `409` if blocks missing |
+| `GET`  | `/files/recipe?path=…` | — | `{path, size, block_hashes}` |
 | `GET`  | `/files` | — | `{files: [FileSummary]}` |
+
+**Legacy whole-file flow** (server proxies the bytes — see "Retiring the legacy API")
+
+| Method | Path | Body | Returns |
+|--------|------|------|---------|
+| `POST` | `/files?path=…` | multipart `file` | `{path, size, blocks}` |
 | `GET`  | `/files/content?path=…` | — | raw bytes |
 
 Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 
-### Request flow — upload
+### Request flow — delta upload (bytes never touch the app server)
 
 ```
-POST /files ─▶ files.router ─▶ FileService.save_file(owner, path, data)
-                                  │
-                                  ├─ chunker.split(data) → [(hash, block)…]
-                                  ├─ BlockStore.put_block(hash, block)  ×N   (dedup: skips existing)
-                                  └─ FileRepository.save(FileRecord)          (recipe → Mongo)
+1. client: blocks = chunker.split(data)            # hashes computed client-side
+2. POST /blocks/missing {hashes}      → server: has_block(owner/h)? → missing[]
+3. POST /blocks/upload-urls {missing} → server: presigned PUT url per owner/hash
+4. client → PUT block bytes → B2 directly           (only the missing blocks)
+5. POST /files/commit {path,size,hashes} → server verifies all present, saves FileRecord
 ```
 
-### Request flow — download
+### Request flow — delta download
 
 ```
-GET /files/content ─▶ FileService.load_file(owner, path)
-                        ├─ FileRepository.get(owner, path) → FileRecord
-                        └─ BlockStore.get_block(h) for h in record.block_hashes → reassemble
+1. GET /files/recipe?path=…          → server: FileRecord.block_hashes
+2. POST /blocks/download-urls {h}    → server: presigned GET url per owner/hash
+3. client → GET each block → B2 directly, re-verify sha256(block)==hash, reassemble
 ```
 
 ---
@@ -202,27 +229,56 @@ GET /files/content ─▶ FileService.load_file(owner, path)
 
 ---
 
+## Retiring the legacy API
+
+The whole-file endpoints (`POST /files`, `GET /files/content`) predate delta sync.
+They proxy file bytes through the app server and buffer the whole file in memory —
+superseded by the delta flow. Nothing but ad-hoc `curl` uses them now (the sync
+client is delta-only).
+
+Because this is a single codebase with one client you fully control, a clean
+**removal** is appropriate — the multi-release *deprecation* dance is for public
+APIs with external consumers you can't coordinate with. Suggested order:
+
+1. **Confirm no callers** — `grep` for `/files/content`, `POST /files` (multipart),
+   `save_file`, `load_file` across `client/` and tests.
+2. **Remove the routes** — `upload` + `download` in `routers/files.py`.
+3. **Remove the service methods** — `FileService.save_file` / `load_file`.
+4. **Drop the now-unused server chunker** — `app/domain/chunker.py` (only
+   `save_file`/`load_file` used it; the client has its own copy). Delete its tests.
+5. **Update tests** — remove the legacy route/service tests; the delta tests remain.
+6. **Update this README** — delete the "Legacy whole-file flow" table + this section.
+
+Keep them instead if you want a no-client "upload via `curl`/Swagger" path — but
+then buffer-in-memory and server-bandwidth costs are the price.
+
+---
+
 ## Sync client
 
 A separate program (`client/`) that keeps a local folder in sync with the server —
 the desktop-Dropbox piece. It talks **only** to the REST API and imports nothing
-from `app/`, so a clean API is its entire contract.
+from `app/`, so a clean API is its entire contract. It does **delta sync**: it
+chunks files itself and transfers only changed blocks, straight to/from B2.
 
 ```
-file change  ──▶ watcher ──▶ SyncEngine.push() ──▶ upload changed files
-every N secs ──────────────▶ SyncEngine.pull() ──▶ download remote changes
+file change  ──▶ watcher ──▶ SyncEngine.push()   chunk → /blocks/missing → PUT missing → /files/commit
+every N secs ──────────────▶ SyncEngine.pull()   /files/recipe → GET blocks (verify) → reassemble
 ```
 
-- **`LocalIndex`** remembers each file's last-synced content hash (persisted to a
-  JSON file **outside** the synced folder), so `push`/`pull` only transfer what
-  actually changed — not the whole folder every scan.
-- **`push`** walks the folder and uploads files whose content hash differs from the
-  index; **`pull`** downloads server files that are missing or differ locally.
+- **`chunker`** splits files into hash-addressed blocks (its own copy of the 4 MiB
+  scheme — the block hash is the shared contract with the server).
+- **`LocalIndex`** remembers each file's last-synced content hash (persisted **outside**
+  the synced folder), so `push` skips unchanged files without touching the network.
+- **`push`** uploads only the blocks the server reports `missing`, then commits the recipe.
+- **`pull`** downloads a differing file's blocks from B2, **re-verifies** each
+  (`sha256(block) == hash`) before reassembling — so a corrupt/poisoned block can
+  never silently corrupt a file.
 - **`watcher`** (watchdog) fires `push()` on any file event; a timer drives `pull()`.
 
-**v1 limitations (documented in `sync.py`):** whole-file transfer (no network-level
-delta yet — the server still dedups *storage*), periodic pull (not real-time),
-last-writer-wins (no conflict copies).
+**v1 limitations (documented in `sync.py`):** pull re-downloads a differing file's
+blocks in full (no local block reuse), periodic pull (not real-time), last-writer-wins
+(no conflict copies).
 
 ---
 
@@ -317,15 +373,16 @@ HTTP are mocked or faked, so the suite runs offline and deterministically.
 ## Status & roadmap
 
 **Done:** content-addressed storage, chunking/dedup, REST API, JWT auth, full
-ports/adapters architecture, **sync client** (folder watcher + push/pull),
+ports/adapters architecture, sync client (folder watcher + push/pull),
+**delta sync** (client-side chunking + have/need negotiation + presigned
+direct-to-B2 transfer + per-user block scoping + re-verify-on-read),
 100% test coverage.
 
 **Next:**
-- Delta sync — block-level endpoints + client-side chunking so only changed
-  *blocks* cross the network (the content-addressed design's big payoff).
 - Real-time change notifications (WebSocket) — instant pulls instead of polling.
 - Sharing & permissions.
 - Web UI.
+- Streaming chunking for very large files (avoid reading whole file into memory).
 
 **Hardening backlog:** unique index on `username`, file delete + orphaned-block
 garbage collection, file versioning (conflict copies), refresh tokens,

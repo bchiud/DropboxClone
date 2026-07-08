@@ -25,3 +25,17 @@ class B2BlockStore(BlockStore):
     def get_block(self, block_hash: str) -> bytes:
         response = self._s3.get_object(Bucket=self._bucket, Key=block_hash)
         return response["Body"].read()
+
+    def presigned_put_url(self, block_hash: str) -> str:
+        return self._s3.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": self._bucket, "Key": block_hash},
+            ExpiresIn=3600,
+        )
+
+    def presigned_get_url(self, block_hash: str) -> str:
+        return self._s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": block_hash},
+            ExpiresIn=3600,
+        )

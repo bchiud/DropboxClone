@@ -10,3 +10,9 @@ class BlockStore(ABC):
 
     @abstractmethod
     def get_block(self, block_hash: str) -> bytes: ...
+
+    @abstractmethod
+    def presigned_put_url(self, block_hash: str) -> str: ...
+
+    @abstractmethod
+    def presigned_get_url(self, block_hash: str) -> str: ...

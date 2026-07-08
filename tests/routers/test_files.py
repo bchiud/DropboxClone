@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.application.file_service import MissingBlocks
 from app.auth_dependencies import get_current_user
 from app.dependencies import get_file_service
 from app.models.file import FileRecord, FileSummary
@@ -28,6 +29,22 @@ class FakeService:
 
     def list_files(self, owner):
         return [FileSummary(owner=owner, path="/a.txt", size=5, updated_at=datetime.now(UTC))]
+
+    def commit_file(self, owner, path, size, block_hashes):
+        if "missing" in block_hashes:
+            raise MissingBlocks(["missing"])
+        return FileRecord(
+            owner=owner, path=path, size=size,
+            block_hashes=block_hashes, updated_at=datetime.now(UTC),
+        )
+
+    def get_recipe(self, owner, path):
+        if path == "/known.txt":
+            return FileRecord(
+                owner=owner, path=path, size=3,
+                block_hashes=["h1", "h2"], updated_at=datetime.now(UTC),
+            )
+        raise FileNotFoundError(path)
 
 
 @pytest.fixture
@@ -67,3 +84,30 @@ def test_download_missing_returns_404(client):
     resp = client.get("/files/content?path=/nope.txt")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "file not found"
+
+
+# --- delta-flow endpoints ---
+
+def test_commit_returns_201(client):
+    resp = client.post("/files/commit",
+                       json={"path": "/a.txt", "size": 5, "block_hashes": ["h1"]})
+    assert resp.status_code == 201
+    assert resp.json() == {"path": "/a.txt", "size": 5, "blocks": 1}
+
+
+def test_commit_missing_blocks_returns_409(client):
+    resp = client.post("/files/commit",
+                       json={"path": "/a.txt", "size": 5, "block_hashes": ["missing"]})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["missing"] == ["missing"]
+
+
+def test_recipe_returns_block_hashes(client):
+    resp = client.get("/files/recipe", params={"path": "/known.txt"})
+    assert resp.status_code == 200
+    assert resp.json()["block_hashes"] == ["h1", "h2"]
+
+
+def test_recipe_missing_returns_404(client):
+    resp = client.get("/files/recipe", params={"path": "/nope.txt"})
+    assert resp.status_code == 404

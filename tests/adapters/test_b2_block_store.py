@@ -27,6 +27,26 @@ def test_is_a_block_store(store):
     assert isinstance(s, BlockStore)
 
 
+def test_presigned_put_url_signs_put_object(store):
+    s, client = store
+    client.generate_presigned_url.return_value = "https://b2/put?sig=abc"
+    url = s.presigned_put_url("h1")
+    assert url == "https://b2/put?sig=abc"
+    args = client.generate_presigned_url.call_args
+    assert args.args[0] == "put_object"
+    assert args.kwargs["Params"] == {"Bucket": "test-bucket", "Key": "h1"}
+
+
+def test_presigned_get_url_signs_get_object(store):
+    s, client = store
+    client.generate_presigned_url.return_value = "https://b2/get?sig=xyz"
+    url = s.presigned_get_url("h1")
+    assert url == "https://b2/get?sig=xyz"
+    args = client.generate_presigned_url.call_args
+    assert args.args[0] == "get_object"
+    assert args.kwargs["Params"] == {"Bucket": "test-bucket", "Key": "h1"}
+
+
 def test_bucket_and_client_injected(store):
     s, client = store
     assert s._bucket == "test-bucket"

@@ -16,3 +16,13 @@ class FileSummary(FileBase):
 
 class FileRecord(FileBase):
     block_hashes: list[str]
+
+
+class BlockHashesRequest(BaseModel):
+    hashes: list[str]
+
+
+class CommitFileRequest(BaseModel):
+    path: str
+    size: int
+    block_hashes: list[str]

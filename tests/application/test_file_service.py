@@ -8,7 +8,7 @@ import pytest
 from app.config import settings
 from app.domain import chunker
 from app.models.file import FileRecord, FileSummary
-from app.application.file_service import FileService
+from app.application.file_service import FileService, MissingBlocks
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
 
@@ -25,6 +25,12 @@ class FakeBlockStore(BlockStore):
 
     def get_block(self, h):
         return self.blocks[h]
+
+    def presigned_put_url(self, h):
+        return f"https://b2.test/put/{h}"
+
+    def presigned_get_url(self, h):
+        return f"https://b2.test/get/{h}"
 
 
 class FakeFileRepository(FileRepository):
@@ -68,7 +74,19 @@ def test_save_uploads_every_block(service):
     data = b"hello world"
     svc.save_file("u", "/a.txt", data)
     for h, _ in chunker.split(data):
-        assert h in store.blocks
+        assert FileService._block_key("u", h) in store.blocks  # keys are owner-namespaced
+
+
+def test_blocks_are_namespaced_per_owner(service):
+    svc, store, _ = service
+    content = b"identical bytes across users"
+    svc.save_file("alice", "/a.txt", content)
+    n = len(store.blocks)
+    svc.save_file("bob", "/a.txt", content)  # same content, different owner
+    assert len(store.blocks) == n + 1  # no cross-user dedup: bob gets his own block
+    h = next(h for h, _ in chunker.split(content))
+    assert FileService._block_key("alice", h) in store.blocks
+    assert FileService._block_key("bob", h) in store.blocks
 
 
 def test_save_then_load_round_trips(service):
@@ -124,3 +142,50 @@ def test_list_files_returns_summaries(service):
     listed = svc.list_files("u")
     assert all(isinstance(s, FileSummary) for s in listed)
     assert {s.path for s in listed} == {"/a.txt", "/b.txt"}
+
+
+# --- block-negotiation methods (direct-to-B2 flow) ---
+
+def test_missing_blocks_returns_only_absent(service):
+    svc, store, _ = service
+    store.blocks[FileService._block_key("u", "have")] = b"x"
+    assert svc.missing_blocks("u", ["have", "gone"]) == ["gone"]
+
+
+def test_upload_urls_are_put_urls_namespaced(service):
+    svc, _, _ = service
+    assert svc.upload_urls("u", ["h1"]) == {"h1": "https://b2.test/put/u/h1"}
+
+
+def test_download_urls_are_get_urls_namespaced(service):
+    svc, _, _ = service
+    assert svc.download_urls("u", ["h1"]) == {"h1": "https://b2.test/get/u/h1"}
+
+
+def test_commit_file_saves_when_all_blocks_present(service):
+    svc, store, repo = service
+    store.blocks[FileService._block_key("u", "h1")] = b"x"
+    rec = svc.commit_file("u", "/a.txt", 5, ["h1"])
+    assert rec.block_hashes == ["h1"]
+    assert rec.updated_at is not None
+    assert repo.get("u", "/a.txt") is not None
+
+
+def test_commit_file_raises_when_blocks_missing(service):
+    svc, _, _ = service
+    with pytest.raises(MissingBlocks) as exc:
+        svc.commit_file("u", "/a.txt", 5, ["nope"])
+    assert exc.value.hashes == ["nope"]
+
+
+def test_get_recipe_returns_full_record(service):
+    svc, store, _ = service
+    store.blocks[FileService._block_key("u", "h1")] = b"x"
+    svc.commit_file("u", "/a.txt", 5, ["h1"])
+    assert svc.get_recipe("u", "/a.txt").block_hashes == ["h1"]
+
+
+def test_get_recipe_missing_raises(service):
+    svc, _, _ = service
+    with pytest.raises(FileNotFoundError):
+        svc.get_recipe("u", "/nope.txt")

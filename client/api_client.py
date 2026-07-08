@@ -14,6 +14,7 @@ class ApiClient:
         self._token = token
 
     # --- auth ---
+
     def register(self, username: str, password: str) -> dict:
         resp = self._http.post(
             "/auth/register",
@@ -36,6 +37,7 @@ class ApiClient:
         return {"Authorization": f"Bearer {self._token}"}
 
     # --- files ---
+
     def list_files(self) -> list[dict]:
         resp = self._http.get("/files", headers=self._auth())
         resp.raise_for_status()
@@ -62,3 +64,61 @@ class ApiClient:
 
     def close(self) -> None:
         self._http.close()
+
+    # --- blocks: negotiation ---
+
+    def missing_blocks(self, hashes: list[str]) -> list[str]:
+        resp = self._http.post(
+            "/blocks/missing",
+            json={"hashes": hashes},
+            headers=self._auth(),
+        )
+        resp.raise_for_status()
+        return resp.json()["missing"]
+
+    def upload_urls(self, hashes: list[str]) -> dict[str, str]:
+        resp = self._http.post(
+            "/blocks/upload-urls",
+            json={"hashes": hashes},
+            headers=self._auth(),
+        )
+        resp.raise_for_status()
+        return resp.json()["urls"]
+
+    def download_urls(self, hashes: list[str]) -> dict[str, str]:
+        resp = self._http.post(
+            "/blocks/download-urls",
+            json={"hashes": hashes},
+            headers=self._auth(),
+        )
+        resp.raise_for_status()
+        return resp.json()["urls"]
+
+    def commit_file(self, path: str, size: int, block_hashes: list[str]) -> dict:
+        resp = self._http.post(
+            "/files/commit",
+            json={"path": path, "size": size, "block_hashes": block_hashes},
+            headers=self._auth(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_recipe(self, path: str) -> dict:
+        resp = self._http.get(
+            "/files/recipe",
+            params={"path": path},
+            headers=self._auth(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- block xfer ---
+
+    def put_block(self, url: str, data: bytes) -> None:
+        resp = self._http.put(url, content=data)
+        resp.raise_for_status()
+
+    def get_block(self, url: str) -> bytes:
+        resp = self._http.get(url)
+        resp.raise_for_status()
+        return resp.content

@@ -30,4 +30,10 @@ def test_complete_implementation_instantiates():
         def get_block(self, h):
             return b""
 
+        def presigned_put_url(self, h):
+            return ""
+
+        def presigned_get_url(self, h):
+            return ""
+
     assert isinstance(Complete(), BlockStore)
