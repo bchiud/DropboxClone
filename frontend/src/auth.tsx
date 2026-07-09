@@ -1,5 +1,14 @@
+import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  Stack,
+  TextField,
+  Typography,
+} from "@mui/material";
 import { useState } from "react";
-import { login, register, ApiError } from "./api";
+import { ApiError, login, register } from "./api";
 
 export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");
@@ -24,22 +33,34 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   }
 
   return (
-    <div>
-      <h1>Dropbox Clone</h1>
-      <input
-        placeholder="username"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-      />
-      <input
-        type="password"
-        placeholder="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-      <button onClick={() => submit("login")}>Log in</button>
-      <button onClick={() => submit("register")}>Register</button>
-      {error && <p style={{ color: "red" }}>{error}</p>}
-    </div>
+    <Container maxWidth="xs">
+      <Box sx={{ mt: 8 }}>
+        <Stack spacing={2}>
+          <Typography variant="h4" align="center">
+            Dropbox Clone
+          </Typography>
+          <TextField
+            label="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            fullWidth
+          />
+          <TextField
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            fullWidth
+          />
+          <Button variant="contained" onClick={() => submit("login")}>
+            Log in
+          </Button>
+          <Button variant="outlined" onClick={() => submit("register")}>
+            Register
+          </Button>
+          {error && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </Box>
+    </Container>
   );
 }

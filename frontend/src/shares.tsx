@@ -1,10 +1,21 @@
 import { useEffect, useState } from "react";
 import {
+  Alert,
+  Box,
+  Button,
+  Divider,
+  List,
+  ListItem,
+  Stack,
+  TextField,
+  Typography,
+} from "@mui/material";
+import {
   createShareLink,
   listShareLinks,
   revokeShareLink,
-  ShareLink,
   shareWithUser,
+  type ShareLink,
 } from "./api";
 
 export function SharePanel({ path }: { path: string }) {
@@ -59,47 +70,70 @@ export function SharePanel({ path }: { path: string }) {
 
   // --- render ---
   return (
-    <div
-      style={{
-        margin: "0.5rem 0",
-        padding: "0.5rem",
-        border: "1px solid #ccc",
-      }}
-    >
-      {status && <p>{status}</p>}
+    <Box sx={{ mt: 1 }}>
+      <Divider sx={{ mb: 1 }} />
 
-      <div>
-        <input
-          placeholder="username"
+      {status && (
+        <Alert severity="info" sx={{ mb: 1 }}>
+          {status}
+        </Alert>
+      )}
+
+      <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+        <TextField
+          size="small"
+          label="username"
           value={recipient}
           onChange={(e) => setRecipient(e.target.value)}
         />
-        <button onClick={grant} disabled={!recipient}>
+        <Button variant="outlined" onClick={grant} disabled={!recipient}>
           Share with user
-        </button>
-      </div>
+        </Button>
+      </Stack>
 
-      <div>
-        <button onClick={makeLink}>Make public link</button>
+      <Stack spacing={1} sx={{ mb: 1 }}>
+        <Button
+          variant="outlined"
+          onClick={makeLink}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          Make public link
+        </Button>
         {linkUrl && (
-          <input
-            readOnly
+          <TextField
+            size="small"
             value={linkUrl}
+            slotProps={{ input: { readOnly: true } }}
             onFocus={(e) => e.target.select()}
-            style={{ width: "100%" }}
+            fullWidth
           />
         )}
-      </div>
+      </Stack>
 
-      <ul>
-        {links.map((l) => (
-          <li key={l.jti}>
-            {l.jti.slice(0, 8)}… expires{" "}
-            {new Date(l.expires_at).toLocaleString()}{" "}
-            <button onClick={() => revoke(l.jti)}>Revoke</button>
-          </li>
-        ))}
-      </ul>
-    </div>
+      {links.length > 0 && (
+        <List dense disablePadding>
+          {links.map((l) => (
+            <ListItem
+              key={l.jti}
+              disableGutters
+              secondaryAction={
+                <Button
+                  size="small"
+                  color="error"
+                  onClick={() => revoke(l.jti)}
+                >
+                  Revoke
+                </Button>
+              }
+            >
+              <Typography variant="body2">
+                {l.jti.slice(0, 8)}… expires{" "}
+                {new Date(l.expires_at).toLocaleString()}
+              </Typography>
+            </ListItem>
+          ))}
+        </List>
+      )}
+    </Box>
   );
 }

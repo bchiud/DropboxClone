@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
 import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  LinearProgress,
+  Paper,
+  Stack,
+  Typography,
+} from "@mui/material";
+import {
   commit,
   connectChanges,
   downloadUrls,
@@ -105,31 +115,59 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
   }
 
   return (
-    <div>
-      <h2>Your files</h2>
-      <button onClick={onLogout}>Log out</button>
-      {error && <p style={{ color: "red" }}>{error}</p>}
-      <input
-        type="file"
+    <Container maxWidth="sm" sx={{ mt: 4 }}>
+      <Stack direction="row" sx={{ alignItems: "center", mb: 2 }}>
+        <Typography variant="h5" sx={{ flexGrow: 1 }}>
+          Your files
+        </Typography>
+        <Button onClick={onLogout}>Log out</Button>
+      </Stack>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      <Button
+        variant="contained"
+        component="label"
         disabled={busy}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) upload(file);
-        }}
-      />
-      {busy && <p>Working…</p>}
-      <ul>
+        sx={{ mb: 1 }}
+      >
+        Upload file
+        <input
+          type="file"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) upload(file);
+          }}
+        />
+      </Button>
+      {busy && <LinearProgress sx={{ mb: 2 }} />}
+
+      <Stack spacing={1}>
         {files.map((f) => (
-          <li key={f.path}>
-            {f.path} — {f.size} bytes{" "}
-            <button onClick={() => download(f)} disabled={busy}>
-              Download
-            </button>
-            <button onClick={() => toggleShare(f.path)}>Share</button>
+          <Paper key={f.path} variant="outlined" sx={{ p: 1 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+              <Box sx={{ flexGrow: 1 }}>
+                <Typography>{f.path}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {f.size} bytes
+                </Typography>
+              </Box>
+              <Button size="small" onClick={() => download(f)} disabled={busy}>
+                Download
+              </Button>
+              <Button size="small" onClick={() => toggleShare(f.path)}>
+                Share
+              </Button>
+            </Stack>
             {openPath === f.path && <SharePanel path={f.path} />}
-          </li>
+          </Paper>
         ))}
-      </ul>
-    </div>
+      </Stack>
+    </Container>
   );
 }

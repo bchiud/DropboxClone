@@ -1,4 +1,13 @@
 import { useEffect, useState } from "react";
+import {
+  Alert,
+  Button,
+  CircularProgress,
+  Container,
+  LinearProgress,
+  Stack,
+  Typography,
+} from "@mui/material";
 import { linkDownloadUrls, linkRecipe, type Recipe } from "./api";
 import { sha256Hex } from "./crypto";
 
@@ -52,18 +61,38 @@ export function PublicDownload({ token }: { token: string }) {
   }
 
   // --- render ---
-  if (error) return <p style={{ color: "red" }}>{error}</p>;
-  if (!rec) return <p>Loading…</p>;
+  if (error)
+    return (
+      <Container maxWidth="sm" sx={{ mt: 8 }}>
+        <Alert severity="error">{error}</Alert>
+      </Container>
+    );
+  if (!rec)
+    return (
+      <Container maxWidth="sm" sx={{ mt: 8 }}>
+        <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
+          <CircularProgress size={20} />
+          <Typography>Loading…</Typography>
+        </Stack>
+      </Container>
+    );
   return (
-    <div>
-      <h1>Shared file</h1>
-      <p>
-        {rec.path.replace(/^\//, "")} — {rec.size} bytes
-      </p>
-      <button onClick={download} disabled={busy}>
-        Download
-      </button>
-      {busy && <p>Downloading…</p>}
-    </div>
+    <Container maxWidth="sm" sx={{ mt: 8 }}>
+      <Stack spacing={2}>
+        <Typography variant="h4">Shared file</Typography>
+        <Typography>
+          {rec.path.replace(/^\//, "")} — {rec.size} bytes
+        </Typography>
+        <Button
+          variant="contained"
+          onClick={download}
+          disabled={busy}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          Download
+        </Button>
+        {busy && <LinearProgress />}
+      </Stack>
+    </Container>
   );
 }
