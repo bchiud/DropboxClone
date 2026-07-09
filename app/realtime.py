@@ -3,8 +3,6 @@ from collections import defaultdict
 from fastapi import WebSocket
 
 
-
-
 class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, set[WebSocket]] = defaultdict(set)

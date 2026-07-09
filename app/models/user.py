@@ -20,6 +20,23 @@ class UserRegisterResponse(UserBase):
     created_at: datetime
 
 
+class RefreshToken(BaseModel):
+    jti: str
+    username: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class AccessTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"

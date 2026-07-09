@@ -1,4 +1,5 @@
 import datetime
+import uuid
 
 import bcrypt
 import jwt
@@ -17,6 +18,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 def create_access_token(subject: str) -> str:
     now = datetime.datetime.now(datetime.UTC)
     payload = {
+        "typ": "access",
         "sub": subject,
         "iat": now,
         "exp": now + datetime.timedelta(minutes=settings.access_token_expire_minutes),
@@ -27,9 +29,31 @@ def create_access_token(subject: str) -> str:
 def decode_access_token(token: str) -> str | None:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        return payload.get("sub")
     except jwt.InvalidTokenError:
         return None
+    if payload.get("typ") != "access":
+        return None
+    return payload.get("sub")
+
+
+def create_refresh_token(subject: str, jti: str, expires_at: datetime.datetime) -> str:
+    payload = {
+        "typ": "refresh",
+        "sub": subject,
+        "jti": jti,
+        "exp": expires_at,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_refresh_token(token: str) -> tuple[str, str] | None:
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("typ") != "refresh":
+        return None
+    return payload["sub"], payload["jti"]
 
 
 def create_share_token(owner: str, path: str, jti: str, expires_at: datetime.datetime) -> str:
@@ -51,3 +75,7 @@ def decode_share_token(token: str) -> tuple[str, str, str] | None:
     if payload.get("typ") != "share":
         return None
     return payload["owner"], payload["path"], payload["jti"]
+
+
+def new_jti() -> str:
+    return uuid.uuid4().hex

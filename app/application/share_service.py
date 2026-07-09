@@ -1,8 +1,7 @@
-import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.config import settings
-from app.domain.security import create_share_token, decode_share_token
+from app.domain.security import create_share_token, decode_share_token, new_jti
 from app.models.share import Share, ShareLink
 from app.ports.share_link_repository import ShareLinkRepository
 from app.ports.share_repository import ShareRepository
@@ -39,7 +38,7 @@ class ShareService:
     # --- public link management ---
 
     def create_link(self, owner: str, path: str) -> str:
-        jti: str = uuid.uuid4().hex
+        jti: str = new_jti()
         expires_at: datetime = datetime.now(UTC) + timedelta(minutes=settings.share_link_expire_minutes)
         self._share_link_repository.add(ShareLink(jti=jti, owner=owner, path=path, expires_at=expires_at))
         return create_share_token(owner=owner, path=path, jti=jti, expires_at=expires_at)

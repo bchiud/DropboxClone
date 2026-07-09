@@ -48,6 +48,39 @@ def test_garbage_token_returns_none():
     assert security.decode_access_token("not.a.jwt") is None
 
 
+# --- refresh tokens ---
+
+def test_refresh_token_round_trip_returns_subject_and_jti():
+    token = security.create_refresh_token("alice", "jti-r1", _future())
+    assert security.decode_refresh_token(token) == ("alice", "jti-r1")
+
+
+def test_expired_refresh_token_returns_none():
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    token = security.create_refresh_token("alice", "jti-r1", past)
+    assert security.decode_refresh_token(token) is None
+
+
+def test_refresh_token_is_rejected_by_access_decoder():
+    # the confusion hole: a refresh token must NOT authenticate as an access token
+    token = security.create_refresh_token("alice", "jti-r1", _future())
+    assert security.decode_access_token(token) is None
+
+
+def test_access_token_is_rejected_by_refresh_decoder():
+    token = security.create_access_token("alice")
+    assert security.decode_refresh_token(token) is None
+
+
+def test_share_token_is_rejected_by_refresh_decoder():
+    token = security.create_share_token("bob", "/x.txt", "jti-1", _future())
+    assert security.decode_refresh_token(token) is None
+
+
+def test_garbage_refresh_token_returns_none():
+    assert security.decode_refresh_token("not.a.jwt") is None
+
+
 # --- share-link tokens ---
 
 def _future():

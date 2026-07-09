@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
+    refresh_token_expire_minutes: int = 60 * 24 * 7  # 7 days
     share_link_expire_minutes: int = 10080
 
 

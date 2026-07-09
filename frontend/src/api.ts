@@ -1,12 +1,22 @@
-// --- client state (auth token) ---
-
+// --- client state ---
+// access token: in memory (short-lived; re-minted from the refresh token as needed)
+// refresh token: localStorage, so the session survives a page reload
 let token: string | null = null;
+const REFRESH_KEY = "refresh_token";
+
 export function setToken(t: string | null) {
   token = t;
 }
-
 export function hasToken(): boolean {
   return token !== null;
+}
+
+function setRefreshToken(t: string | null) {
+  if (t) localStorage.setItem(REFRESH_KEY, t);
+  else localStorage.removeItem(REFRESH_KEY);
+}
+function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY);
 }
 
 // --- errors ---
@@ -22,10 +32,17 @@ export class ApiError extends Error {
 
 // --- request helper ---
 
-async function request(path: string, init?: RequestInit): Promise<Response> {
+async function request(
+  path: string,
+  init?: RequestInit,
+  retry = true,
+): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const res = await fetch(path, { ...init, headers });
+  if (res.status === 401 && retry && (await refreshAccessToken())) {
+    return request(path, init, false); // retry once with the fresh access token
+  }
   if (!res.ok) {
     throw new ApiError(
       res.status,
@@ -53,8 +70,51 @@ export async function login(username: string, password: string): Promise<void> {
     method: "POST",
     body: new URLSearchParams({ username, password }),
   });
+  const data = (await res.json()) as {
+    access_token: string;
+    refresh_token: string;
+  };
+  setToken(data.access_token);
+  setRefreshToken(data.refresh_token);
+}
+
+async function refreshAccessToken(): Promise<boolean> {
+  const refresh = getRefreshToken();
+  if (!refresh) return false;
+  const res = await fetch("/auth/refresh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refresh }),
+  });
+  if (!res.ok) {
+    setRefreshToken(null); // refresh token dead/revoked → force a real re-login
+    return false;
+  }
   const data = (await res.json()) as { access_token: string };
   setToken(data.access_token);
+  return true;
+}
+
+export async function logout(): Promise<void> {
+  const refresh = getRefreshToken();
+  if (refresh) {
+    try {
+      await request("/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+    } catch {
+      // best-effort: even if the call fails, clear local tokens below
+    }
+  }
+  setToken(null);
+  setRefreshToken(null);
+}
+
+export async function restoreSession(): Promise<boolean> {
+  if (hasToken()) return true;
+  return refreshAccessToken();
 }
 
 // --- files ---

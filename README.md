@@ -620,6 +620,10 @@ delete, sharing — grant to a user, mint/copy/revoke public links, and a no-aut
 public download page),
 **file deletion** (`DELETE /files`, owner-scoped from the token; removes the
 recipe only and leaves blocks for GC),
+**refresh tokens** (short-lived access + long-lived refresh with a Mongo `jti`
+allowlist and TTL auto-reap; `/auth/refresh` mints new access tokens,
+`/auth/logout` revokes; `typ`-guarded so access/refresh/share tokens can't be
+swapped; web session survives reload and auto-refreshes on a 401),
 **data-integrity constraint** (unique index on `username`), 100% test coverage.
 
 **Next:**
@@ -631,5 +635,6 @@ recipe only and leaves blocks for GC),
   operation that creates real orphans; `scripts/audit_storage.py` is the cleanup
   path, and a scheduled mark-and-sweep GC finally has a use case.
 
-**Hardening backlog:** file versioning (conflict copies), refresh tokens.
+**Hardening backlog:** file versioning (conflict copies), refresh-token rotation
+(currently non-rotating), httpOnly-cookie storage (currently `localStorage`).
 ```

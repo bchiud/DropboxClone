@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.application.auth_service import AuthService, InvalidCredentials, UsernameTaken
+from app.application.auth_service import AuthService, InvalidCredentials, InvalidRefreshToken, UsernameTaken
 from app.dependencies import get_auth_service
-from app.models.user import TokenResponse, User, UserRegisterRequest, UserRegisterResponse
+from app.models.user import (
+    AccessTokenResponse, RefreshRequest, TokenResponse, User, UserRegisterRequest,
+    UserRegisterResponse,
+)
 
 router = APIRouter(
     prefix="/auth",
@@ -33,11 +36,35 @@ def login_user(
         auth_service: AuthService = Depends(get_auth_service),
 ):
     try:
-        token: str = auth_service.authenticate(form.username.lower(), form.password)
+        access, refresh = auth_service.authenticate(form.username.lower(), form.password)
     except InvalidCredentials:
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return TokenResponse(access_token=token).model_dump()
+    return TokenResponse(access_token=access, refresh_token=refresh).model_dump()
+
+
+@router.post("/refresh", response_model=AccessTokenResponse)
+def refresh_access_token(
+        body: RefreshRequest,
+        auth_service: AuthService = Depends(get_auth_service),
+):
+    try:
+        access = auth_service.refresh(body.refresh_token)
+    except InvalidRefreshToken:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return AccessTokenResponse(access_token=access).model_dump()
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+        body: RefreshRequest,
+        auth_service: AuthService = Depends(get_auth_service),
+):
+    auth_service.logout(body.refresh_token)
