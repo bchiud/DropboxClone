@@ -424,10 +424,19 @@ python -m client --server http://127.0.0.1:8000 \
 
 ### 4. Launch the web UI (optional)
 
-A React + Vite single-page app in `frontend/` gives you a browser client:
-register/login, list files, upload (with block-level dedup), and download
-(with on-read hash verification) — all bytes go **browser → B2 directly** via
-presigned URLs, exactly like the Python client.
+A React + Vite single-page app in `frontend/` gives you a browser client with
+the same delta engine as the Python client — chunking, dedup, and hash
+verification all run in the browser, and block bytes go **browser → B2 directly**
+via presigned URLs. It covers:
+
+- **Auth** — register / login / logout (JWT held in memory).
+- **Files** — list, upload (block-level dedup), download (on-read hash verify).
+- **Sharing** — grant read-only access to another user, and mint / copy / revoke
+  public share-links, each with an expandable per-file panel.
+- **Public links** — a no-auth `/?token=…` page that resolves a share-link and
+  downloads the file (hash-verified) with no account.
+- **Real-time** — a WebSocket (`/ws`) refreshes the file list live when the same
+  account commits from another device, instead of on manual reload.
 
 ```bash
 cd frontend

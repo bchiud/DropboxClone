@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   commit,
+  connectChanges,
   downloadUrls,
   listFiles,
   missingBlocks,
@@ -28,7 +29,9 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
   }
 
   useEffect(() => {
-    refresh();
+    refresh(); // initial load on mount
+    const ws = connectChanges(() => refresh()); // + live updates after
+    return () => ws.close();
   }, []);
 
   // --- upload ---

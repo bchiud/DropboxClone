@@ -203,3 +203,16 @@ export async function linkDownloadUrls(
   const data = (await res.json()) as { urls: Record<string, string> };
   return data.urls;
 }
+
+// --- real time ---
+export function connectChanges(onChange: () => void): WebSocket {
+  const url = new URL("/ws", window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("token", token ?? "");
+  const ws = new WebSocket(url.toString());
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "changed") onChange();
+  };
+  return ws;
+}
