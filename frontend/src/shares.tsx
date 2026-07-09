@@ -4,12 +4,18 @@ import {
   Box,
   Button,
   Divider,
+  IconButton,
+  InputAdornment,
   List,
   ListItem,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
+import AddLinkIcon from "@mui/icons-material/AddLink";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DeleteIcon from "@mui/icons-material/Delete";
+import PersonAddIcon from "@mui/icons-material/PersonAdd";
 import {
   createShareLink,
   listShareLinks,
@@ -59,6 +65,12 @@ export function SharePanel({ path }: { path: string }) {
     }
   }
 
+  async function copyLink() {
+    if (!linkUrl) return;
+    await navigator.clipboard.writeText(linkUrl);
+    setStatus("Link copied to clipboard");
+  }
+
   async function revoke(jti: string) {
     try {
       await revokeShareLink(jti);
@@ -86,7 +98,12 @@ export function SharePanel({ path }: { path: string }) {
           value={recipient}
           onChange={(e) => setRecipient(e.target.value)}
         />
-        <Button variant="outlined" onClick={grant} disabled={!recipient}>
+        <Button
+          variant="outlined"
+          startIcon={<PersonAddIcon />}
+          onClick={grant}
+          disabled={!recipient}
+        >
           Share with user
         </Button>
       </Stack>
@@ -94,6 +111,7 @@ export function SharePanel({ path }: { path: string }) {
       <Stack spacing={1} sx={{ mb: 1 }}>
         <Button
           variant="outlined"
+          startIcon={<AddLinkIcon />}
           onClick={makeLink}
           sx={{ alignSelf: "flex-start" }}
         >
@@ -103,9 +121,20 @@ export function SharePanel({ path }: { path: string }) {
           <TextField
             size="small"
             value={linkUrl}
-            slotProps={{ input: { readOnly: true } }}
             onFocus={(e) => e.target.select()}
             fullWidth
+            slotProps={{
+              input: {
+                readOnly: true,
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton edge="end" size="small" onClick={copyLink}>
+                      <ContentCopyIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              },
+            }}
           />
         )}
       </Stack>
@@ -120,6 +149,7 @@ export function SharePanel({ path }: { path: string }) {
                 <Button
                   size="small"
                   color="error"
+                  startIcon={<DeleteIcon />}
                   onClick={() => revoke(l.jti)}
                 >
                   Revoke

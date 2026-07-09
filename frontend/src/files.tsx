@@ -9,6 +9,10 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
+import DownloadIcon from "@mui/icons-material/Download";
+import LogoutIcon from "@mui/icons-material/Logout";
+import ShareIcon from "@mui/icons-material/Share";
 import {
   commit,
   connectChanges,
@@ -120,7 +124,9 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Your files
         </Typography>
-        <Button onClick={onLogout}>Log out</Button>
+        <Button startIcon={<LogoutIcon />} onClick={onLogout}>
+          Log out
+        </Button>
       </Stack>
 
       {error && (
@@ -133,6 +139,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
         variant="contained"
         component="label"
         disabled={busy}
+        startIcon={<CloudUploadIcon />}
         sx={{ mb: 1 }}
       >
         Upload file
@@ -157,10 +164,19 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
                   {f.size} bytes
                 </Typography>
               </Box>
-              <Button size="small" onClick={() => download(f)} disabled={busy}>
+              <Button
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={() => download(f)}
+                disabled={busy}
+              >
                 Download
               </Button>
-              <Button size="small" onClick={() => toggleShare(f.path)}>
+              <Button
+                size="small"
+                startIcon={<ShareIcon />}
+                onClick={() => toggleShare(f.path)}
+              >
                 Share
               </Button>
             </Stack>

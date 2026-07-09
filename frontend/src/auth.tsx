@@ -7,13 +7,16 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import LoginIcon from "@mui/icons-material/Login";
+import PersonAddIcon from "@mui/icons-material/PersonAdd";
+import { useRef, useState } from "react";
 import { ApiError, login, register } from "./api";
 
 export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   async function submit(mode: "login" | "register") {
     setError(null);
@@ -43,6 +46,9 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             label="Username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") passwordRef.current?.focus();
+            }}
             fullWidth
           />
           <TextField
@@ -50,12 +56,24 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit("login");
+            }}
+            inputRef={passwordRef}
             fullWidth
           />
-          <Button variant="contained" onClick={() => submit("login")}>
+          <Button
+            variant="contained"
+            startIcon={<LoginIcon />}
+            onClick={() => submit("login")}
+          >
             Log in
           </Button>
-          <Button variant="outlined" onClick={() => submit("register")}>
+          <Button
+            variant="outlined"
+            startIcon={<PersonAddIcon />}
+            onClick={() => submit("register")}
+          >
             Register
           </Button>
           {error && <Alert severity="error">{error}</Alert>}
