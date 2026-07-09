@@ -6,6 +6,7 @@ from pymongo import MongoClient
 
 from app.adapters.b2_block_store import B2BlockStore
 from app.adapters.mongo_file_repository import MongoFileRepository
+from app.adapters.mongo_share_link_repository import MongoShareLinkRepository
 from app.adapters.mongo_share_repository import MongoShareRepository
 from app.adapters.mongo_user_repository import MongoUserRepository
 from app.application.auth_service import AuthService
@@ -14,6 +15,7 @@ from app.application.share_service import ShareService
 from app.config import settings
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
+from app.ports.share_link_repository import ShareLinkRepository
 from app.ports.share_repository import ShareRepository
 from app.ports.user_repository import UserRepository
 from app.realtime import ConnectionManager
@@ -47,6 +49,11 @@ def get_share_repository() -> ShareRepository:
 
 
 @lru_cache
+def get_share_link_repository() -> ShareLinkRepository:
+    return MongoShareLinkRepository(_get_database()["share_links"])
+
+
+@lru_cache
 def get_user_repository() -> UserRepository:
     return MongoUserRepository(_get_database()["users"])
 
@@ -67,6 +74,7 @@ def get_file_service() -> FileService:
 def get_share_service() -> ShareService:
     return ShareService(
         share_repository=get_share_repository(),
+        share_link_repository=get_share_link_repository(),
     )
 
 

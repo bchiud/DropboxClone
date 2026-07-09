@@ -1,34 +1,35 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.application.file_service import FileService
-from app.dependencies import get_file_service
-from app.domain.security import decode_share_token
+from app.application.share_service import ShareService
+from app.dependencies import get_file_service, get_share_service
 from app.models.file import BlockHashesRequest, FileRecord
 
 router = APIRouter(prefix="/link", tags=["link"])
 
 
-def _decode_share_token(token: str) -> tuple[str, str]:
-    decoded: tuple[str, str] | None = decode_share_token(token)
-    if decoded is None:
+def _resolve_share_token(token: str, share_service: ShareService) -> tuple[str, str]:
+    resolved: tuple[str, str] | None = share_service.resolve_link(token)
+    if resolved is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return decoded
+    return resolved
 
 
 @router.get("/recipe")
 def link_recipe(
         token: str,
-        fileService: FileService = Depends(get_file_service),
+        file_service: FileService = Depends(get_file_service),
+        share_service: ShareService = Depends(get_share_service),
 ) -> dict:
-    owner, path = _decode_share_token(token)
+    owner, path = _resolve_share_token(token, share_service)
     try:
-        fileRecord: FileRecord = fileService.get_recipe(owner=owner, path=path)
+        file_record: FileRecord = file_service.get_recipe(owner=owner, path=path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     return {
-        "path": fileRecord.path,
-        "size": fileRecord.size,
-        "block_hashes": fileRecord.block_hashes,
+        "path": file_record.path,
+        "size": file_record.size,
+        "block_hashes": file_record.block_hashes,
     }
 
 
@@ -36,7 +37,8 @@ def link_recipe(
 def link_download_urls(
         token: str,
         body: BlockHashesRequest,
-        fileService: FileService = Depends(get_file_service),
+        file_service: FileService = Depends(get_file_service),
+        share_service: ShareService = Depends(get_share_service),
 ) -> dict:
-    owner, _path = _decode_share_token(token)
-    return {"urls": fileService.download_urls(owner=owner, hashes=body.hashes)}
+    owner, _path = _resolve_share_token(token, share_service)
+    return {"urls": file_service.download_urls(owner=owner, hashes=body.hashes)}

@@ -1,10 +1,23 @@
-from app.models.share import Share
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from app.config import settings
+from app.domain.security import create_share_token, decode_share_token
+from app.models.share import Share, ShareLink
+from app.ports.share_link_repository import ShareLinkRepository
 from app.ports.share_repository import ShareRepository
 
 
 class ShareService:
-    def __init__(self, share_repository: ShareRepository) -> None:
+    def __init__(
+            self,
+            share_repository: ShareRepository,
+            share_link_repository: ShareLinkRepository,
+    ) -> None:
         self._share_repository = share_repository
+        self._share_link_repository = share_link_repository
+
+    # --- user-to-user sharing ---
 
     def share(self, owner: str, path: str, shared_with: str) -> Share:
         share: Share = Share(owner=owner, path=path, shared_with=shared_with)
@@ -22,3 +35,26 @@ class ShareService:
 
     def can_read(self, requester: str, owner: str, path: str) -> bool:
         return requester == owner or self._share_repository.exists(owner=owner, path=path, shared_with=requester)
+
+    # --- public link sharing ---
+
+    def create_link(self, owner: str, path: str) -> str:
+        jti: str = uuid.uuid4().hex
+        expires_at: datetime = datetime.now(UTC) + timedelta(minutes=settings.share_link_expire_minutes)
+        self._share_link_repository.add(ShareLink(jti=jti, owner=owner, path=path, expires_at=expires_at))
+        return create_share_token(owner=owner, path=path, jti=jti, expires_at=expires_at)
+
+    def revoke_link(self, owner: str, jti: str) -> None:
+        self._share_link_repository.delete(owner=owner, jti=jti)
+
+    def list_links(self, owner: str) -> list[ShareLink]:
+        return self._share_link_repository.list_for_owner(owner=owner)
+
+    def resolve_link(self, token: str) -> tuple[str, str] | None:
+        decoded = decode_share_token(token)
+        if decoded is None:
+            return None
+        owner, path, jti = decoded
+        if not self._share_link_repository.exists(jti=jti):
+            return None
+        return owner, path

@@ -14,7 +14,7 @@ router = APIRouter(
 async def websocket_endpoint(
         websocket: WebSocket,
         token: str,
-        connectionManager: ConnectionManager = Depends(get_connection_manager),
+        connection_manager: ConnectionManager = Depends(get_connection_manager),
 ):
     # websockets can't carry auth headers, so token is passed in url query string
     username: str = security.decode_access_token(token)
@@ -23,7 +23,7 @@ async def websocket_endpoint(
         return
 
     await websocket.accept()
-    connectionManager.add(username, websocket)
+    connection_manager.add(username, websocket)
     try:
         while True:
             # client mostly listens, but awaiting receive is how we detect WebSocketDisconnect
@@ -31,4 +31,4 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         pass
     finally:
-        connectionManager.remove(username, websocket)
+        connection_manager.remove(username, websocket)

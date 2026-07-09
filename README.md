@@ -88,8 +88,8 @@ services are unit-tested with in-memory fakes, no cloud required.
 | Presentation | `app/routers/` | HTTP, FastAPI | `files.py`, `auth.py`, `shares.py`, `link.py` |
 | Application | `app/application/` | ports, domain | `FileService`, `AuthService`, `ShareService` |
 | Domain | `app/domain/`, `app/models/` | nothing external | `chunker`, `security`, Pydantic models |
-| Ports | `app/ports/` | — (abstract) | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository` |
-| Adapters | `app/adapters/` | B2, Mongo | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository` |
+| Ports | `app/ports/` | — (abstract) | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository` |
+| Adapters | `app/adapters/` | B2, Mongo | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository` |
 
 ---
 
@@ -108,14 +108,14 @@ app/
 │   ├── files.py            #   /files   list · commit · recipe (share-aware)
 │   ├── blocks.py           #   /blocks  missing · upload-urls · download-urls (share-aware)
 │   ├── auth.py             #   /auth    register · login
-│   ├── shares.py           #   /shares  grant · revoke · incoming · outgoing · link
+│   ├── shares.py           #   /shares  grant · revoke · incoming · outgoing · link (mint · revoke · list)
 │   ├── link.py             #   /link    public token-only recipe · download-urls (no auth)
 │   └── ws.py               #   /ws      WebSocket: push "changed" to a user's devices
 │
 ├── application/            # use-case orchestrators (no framework deps)
 │   ├── file_service.py     #   FileService: list · missing_blocks · upload_urls · commit_file · get_recipe
 │   ├── auth_service.py     #   AuthService: register / authenticate
-│   └── share_service.py    #   ShareService: share · revoke · list · can_read (authorization)
+│   └── share_service.py    #   ShareService: share · revoke · list · can_read · create/revoke/list/resolve_link
 │
 ├── domain/                 # pure logic, no I/O
 │   └── security.py         #   bcrypt hashing + JWT (access + share-link) encode/decode
@@ -123,19 +123,21 @@ app/
 ├── models/                 # Pydantic schemas (the "NoSQL schema")
 │   ├── file.py             #   FileMeta → FileSummary / FileRecord
 │   ├── user.py             #   User, UserRegisterRequest/Response, TokenResponse
-│   └── share.py            #   Share, ShareRequest, ShareLinkRequest
+│   └── share.py            #   Share, ShareRequest, ShareLink, ShareLinkRequest
 │
 ├── ports/                  # abstract interfaces (ABCs)
-│   ├── block_store.py      #   BlockStore
-│   ├── file_repository.py  #   FileRepository
-│   ├── user_repository.py  #   UserRepository
-│   └── share_repository.py #   ShareRepository
+│   ├── block_store.py           #   BlockStore
+│   ├── file_repository.py       #   FileRepository
+│   ├── user_repository.py       #   UserRepository
+│   ├── share_repository.py      #   ShareRepository
+│   └── share_link_repository.py #   ShareLinkRepository
 │
 └── adapters/               # concrete implementations
-    ├── b2_block_store.py         # BlockStore     → Backblaze B2 (boto3)
-    ├── mongo_file_repository.py  # FileRepository  → MongoDB
-    ├── mongo_user_repository.py  # UserRepository  → MongoDB
-    └── mongo_share_repository.py # ShareRepository → MongoDB
+    ├── b2_block_store.py              # BlockStore          → Backblaze B2 (boto3)
+    ├── mongo_file_repository.py       # FileRepository      → MongoDB
+    ├── mongo_user_repository.py       # UserRepository      → MongoDB
+    ├── mongo_share_repository.py      # ShareRepository     → MongoDB
+    └── mongo_share_link_repository.py # ShareLinkRepository → MongoDB
 
 client/                     # the sync client — imports nothing from app/
 ├── chunker.py              #   client-side chunking (block hash = shared contract)
@@ -170,11 +172,16 @@ UserBase(username)
 Share(owner, path, shared_with, created_at)   # one user-to-user grant (Mongo `shares`)
  ├── ShareRequest(path, shared_with)           # grant/revoke request body
  └── ShareLinkRequest(path)                     # mint-a-public-link request body
+
+ShareLink(jti, owner, path, created_at, expires_at)  # one live public link (Mongo `share_links`)
 ```
 
 `FileSummary` vs `FileRecord` is a deliberate read/write split: listings project
 away the (potentially huge) `block_hashes` array. A `Share` is keyed on the
-`(owner, path, shared_with)` triple — one document per grant.
+`(owner, path, shared_with)` triple — one document per grant. A `ShareLink` row
+is keyed on `jti` (the token's unique id): its existence is what makes a link
+*live*, so revoking is just deleting the row, and `expires_at` mirrors the
+token's `exp` claim (both set once, at mint).
 
 ---
 
@@ -214,12 +221,14 @@ and returns `404` (never `403`) if you have none.
 | `GET`    | `/shares/incoming` | — | `[Share]` — files shared **with me** |
 | `GET`    | `/shares/outgoing` | — | `[Share]` — grants **I've made** |
 | `POST`   | `/shares/link` | `{path}` | `{token}` — mint a public share-link token for *your* file |
+| `DELETE` | `/shares/link/{jti}` | — | `204` — revoke a link by its `jti` (owner-scoped) |
+| `GET`    | `/shares/link` | — | `[ShareLink]` — links **I've minted** that are still live |
 
 **Public links** (no auth — the signed token *is* the identity)
 
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
-| `GET`  | `/link/recipe?token=…` | — | `{path, size, block_hashes}` — `404` on a bad/forged token |
+| `GET`  | `/link/recipe?token=…` | — | `{path, size, block_hashes}` — `404` on a bad/forged/**revoked/expired** token |
 | `POST` | `/link/download-urls?token=…` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}` |
 
 Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
@@ -268,12 +277,13 @@ as *less code* (there is no `can_write`).
 
 | | User-to-user | Public link |
 |---|---|---|
-| **Identity** | JWT auth token → `current_user` | signed share token → `(owner, path)` |
-| **Grant store** | Mongo `shares` collection | none — stateless; the token *is* the grant |
-| **Authz check** | `ShareService.can_read` (you are the owner **or** a grant exists) | `decode_share_token` (valid signature **and** `typ == "share"`) |
+| **Identity** | JWT auth token → `current_user` | signed share token → `(owner, path, jti)` |
+| **Grant store** | Mongo `shares` collection | Mongo `share_links` — one row per **live** link, keyed on `jti` |
+| **Authz check** | `ShareService.can_read` (you are the owner **or** a grant exists) | `ShareService.resolve_link` (valid signature, `typ == "share"`, **not expired**, **and its `jti` row still exists**) |
 | **Mint** | `POST /shares` | `POST /shares/link` |
 | **Read** | `GET /files/recipe?owner=`, `POST /blocks/download-urls?owner=` | `GET /link/recipe`, `POST /link/download-urls` (no login) |
-| **Revoke** | `DELETE /shares` | — (links are permanent; see below) |
+| **Revoke** | `DELETE /shares` | `DELETE /shares/link/{jti}` (deletes the row) |
+| **Expiry** | — (grants are durable) | `exp` claim, default 7 days (`SHARE_LINK_EXPIRE_MINUTES`) |
 
 **Security invariants:**
 
@@ -286,11 +296,25 @@ as *less code* (there is no `can_write`).
   auth token from being redeemed as a link, or vice-versa.
 - **A share link carries no user.** The token *is* the capability: whoever holds
   `?token=…` may read exactly one `(owner, path)`, read-only, with no account.
+- **Links expire and are revocable.** Two independent kill-switches, both checked
+  on every read by `resolve_link`:
+  - **Expiry** is free and offline — the `exp` claim is set once at mint (default
+    7 days, `SHARE_LINK_EXPIRE_MINUTES`) and enforced by JWT decode, so an expired
+    token fails signature-check before any DB lookup.
+  - **Revocation** is an *allowlist*: minting writes a `share_links` row keyed on
+    the token's `jti`, and a read only resolves while that row exists. `DELETE
+    /shares/link/{jti}` deletes it — instantly and irreversibly killing the link,
+    even though the signed token itself is still cryptographically valid. The same
+    row powers `GET /shares/link` (list your live links). Revoke is **owner-scoped**
+    (`{owner, jti}` filter), so no one can revoke a link they didn't mint.
 
-**Tradeoffs (v1):** public links **don't expire and can't be revoked** short of
-rotating `JWT_SECRET` (add an `exp` claim, or a per-link id checked in Mongo, to
-change that). Granting a path that doesn't exist just creates a harmless dangling
-grant that resolves to `404` on access.
+The `exp` claim and the row's `expires_at` are a **single source of truth** —
+both computed once in `create_link`, so the JWT and the DB can never disagree.
+
+**Tradeoffs (v1):** expired rows are left in `share_links` (they already fail the
+`exp` check, so they're inert — a TTL index or a sweep can reap them later).
+Granting a path that doesn't exist just creates a harmless dangling grant that
+resolves to `404` on access.
 
 ---
 
@@ -333,6 +357,7 @@ S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION, S3_BUCKET
 JWT_SECRET                        # required; generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
 JWT_ALGORITHM=HS256               # optional
 ACCESS_TOKEN_EXPIRE_MINUTES=60    # optional
+SHARE_LINK_EXPIRE_MINUTES=10080   # optional (default 7 days) — public share-link lifetime
 ```
 
 > **macOS note:** MongoDB Atlas TLS requires `certifi` (`tlsCAFile=certifi.where()`),
@@ -400,8 +425,8 @@ python -m client --server http://127.0.0.1:8000 \
 ## Demo: the whole system via `curl`
 
 With the server running (and `jq` installed), this walks through upload →
-share → read-as-another-user → public link → revoke. It uses a small
-single-block file, so the block hash is just `sha256(file)`.
+share → read-as-another-user → public link → revoke-link → revoke-grant. It
+uses a small single-block file, so the block hash is just `sha256(file)`.
 
 ```bash
 BASE=http://127.0.0.1:8000
@@ -451,14 +476,20 @@ curl -s "$GET"                                   # -> hello shared world
 # 6. Public share link — redeemable with NO auth header
 TOKEN=$(curl -s -X POST $BASE/shares/link -H "Authorization: Bearer $BOB" \
      -H 'Content-Type: application/json' -d '{"path":"/demo.txt"}' | jq -r .token)
-curl -s "$BASE/link/recipe?token=$TOKEN"
+curl -s "$BASE/link/recipe?token=$TOKEN"          # -> the recipe, no login
 
-# 7. Revoke Alice's grant — she now gets 404 (the link still works)
+# 7. Bob lists his live links, then revokes this one by its jti
+JTI=$(curl -s "$BASE/shares/link" -H "Authorization: Bearer $BOB" | jq -r '.[0].jti')
+curl -s -X DELETE "$BASE/shares/link/$JTI" -H "Authorization: Bearer $BOB"
+#   the SAME token is still cryptographically valid, yet its row is gone -> revoked
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/link/recipe?token=$TOKEN"   # -> 404
+
+# 8. Revoke Alice's grant — she now gets 404 on the shared file too
 curl -s -X DELETE $BASE/shares -H "Authorization: Bearer $BOB" \
      -H 'Content-Type: application/json' \
      -d '{"path":"/demo.txt","shared_with":"alice"}'
 curl -s -o /dev/null -w '%{http_code}\n' \
-     "$BASE/files/recipe?owner=bob&path=/demo.txt" -H "Authorization: Bearer $ALICE"
+     "$BASE/files/recipe?owner=bob&path=/demo.txt" -H "Authorization: Bearer $ALICE"  # -> 404
 ```
 
 > Files over 4 MiB span multiple blocks — the real client (`python -m client`)
@@ -484,8 +515,9 @@ delta sync (client-side chunking + have/need negotiation + presigned
 direct-to-B2 transfer + per-user block scoping + re-verify-on-read),
 **real-time sync** (WebSocket push: commit notifies the owner's devices, which
 pull instantly instead of polling),
-**sharing & permissions** (read-only user-to-user grants + stateless public
-share-links, both gated by an authorization layer that never touches storage),
+**sharing & permissions** (read-only user-to-user grants + public share-links
+with **expiry and revocation** — an `exp` claim plus a `jti` allowlist in Mongo —
+all gated by an authorization layer that never touches storage),
 100% test coverage.
 
 **Next:**

@@ -17,13 +17,13 @@ router = APIRouter(
     status_code=status.HTTP_201_CREATED,
 )
 def register_user(
-        userRequest: UserRegisterRequest,
+        user_request: UserRegisterRequest,
         auth_service: AuthService = Depends(get_auth_service),
 ):
     try:
-        user: User = auth_service.register(userRequest.username.lower(), userRequest.password)
+        user: User = auth_service.register(user_request.username.lower(), user_request.password)
     except UsernameTaken:
-        raise HTTPException(status_code=409, detail=f"Username={userRequest.username} already exists")
+        raise HTTPException(status_code=409, detail=f"Username={user_request.username} already exists")
     return user
 
 

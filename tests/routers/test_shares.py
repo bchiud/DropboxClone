@@ -10,15 +10,16 @@ from fastapi.testclient import TestClient
 
 from app.auth_dependencies import get_current_user
 from app.dependencies import get_share_service
-from app.domain.security import decode_share_token
 from app.main import app
-from app.models.share import Share
+from app.models.share import Share, ShareLink
 
 
 class FakeShareService:
     def __init__(self):
         self.shared = None
         self.revoked = None
+        self.linked = None
+        self.revoked_link = None
 
     def share(self, owner, path, shared_with):
         self.shared = (owner, path, shared_with)
@@ -35,6 +36,17 @@ class FakeShareService:
     def list_outgoing(self, owner):
         return [Share(owner=owner, path="/out.txt", shared_with="dave",
                       created_at=datetime.now(UTC))]
+
+    def create_link(self, owner, path):
+        self.linked = (owner, path)
+        return "minted-token"
+
+    def revoke_link(self, owner, jti):
+        self.revoked_link = (owner, jti)
+
+    def list_links(self, owner):
+        return [ShareLink(jti="j1", owner=owner, path="/l.txt",
+                          created_at=datetime.now(UTC), expires_at=datetime.now(UTC))]
 
 
 @pytest.fixture
@@ -78,11 +90,27 @@ def test_outgoing_lists_grants_from_the_caller(service):
     assert body[0]["shared_with"] == "dave"
 
 
-def test_create_link_mints_a_token_owned_by_the_caller(service):
+def test_create_link_pins_owner_to_the_caller(service):
     resp = TestClient(app).post("/shares/link", json={"path": "/x.txt"})
     assert resp.status_code == 200
-    # owner is pinned to the token, redeemable back to (caller, path)
-    assert decode_share_token(resp.json()["token"]) == ("bob", "/x.txt")
+    # owner comes from the token, never the request body
+    assert service.linked == ("bob", "/x.txt")
+    assert resp.json()["token"] == "minted-token"
+
+
+def test_revoke_link_is_scoped_to_the_caller(service):
+    resp = TestClient(app).delete("/shares/link/j1")
+    assert resp.status_code == 204
+    # revoke carries the caller as owner so one user can't revoke another's link
+    assert service.revoked_link == ("bob", "j1")
+
+
+def test_list_links_returns_the_callers_links(service):
+    resp = TestClient(app).get("/shares/link")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["owner"] == "bob"
+    assert body[0]["jti"] == "j1"
 
 
 def test_shares_require_auth():

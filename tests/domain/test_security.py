@@ -1,4 +1,6 @@
 """Unit tests for security primitives — hashing and JWTs."""
+from datetime import UTC, datetime, timedelta
+
 import jwt
 
 from app.config import settings
@@ -48,9 +50,19 @@ def test_garbage_token_returns_none():
 
 # --- share-link tokens ---
 
-def test_share_token_round_trip_returns_owner_and_path():
-    token = security.create_share_token("bob", "/x.txt")
-    assert security.decode_share_token(token) == ("bob", "/x.txt")
+def _future():
+    return datetime.now(UTC) + timedelta(minutes=60)
+
+
+def test_share_token_round_trip_returns_owner_path_and_jti():
+    token = security.create_share_token("bob", "/x.txt", "jti-1", _future())
+    assert security.decode_share_token(token) == ("bob", "/x.txt", "jti-1")
+
+
+def test_expired_share_token_returns_none():
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    token = security.create_share_token("bob", "/x.txt", "jti-1", past)
+    assert security.decode_share_token(token) is None
 
 
 def test_access_token_is_rejected_by_share_decoder():

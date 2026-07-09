@@ -1,0 +1,55 @@
+"""Unit tests for the Mongo share-link-repository adapter."""
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
+
+import pytest
+
+from app.adapters.mongo_share_link_repository import MongoShareLinkRepository
+from app.models.share import ShareLink
+from app.ports.share_link_repository import ShareLinkRepository
+
+
+@pytest.fixture
+def repo():
+    col = MagicMock()
+    return MongoShareLinkRepository(col), col
+
+
+def link():
+    exp = datetime.now(UTC) + timedelta(minutes=10080)
+    return ShareLink(jti="j1", owner="bob", path="/x.txt", expires_at=exp)
+
+
+def test_is_a_share_link_repository(repo):
+    r, _ = repo
+    assert isinstance(r, ShareLinkRepository)
+
+
+def test_add_inserts_the_dumped_doc(repo):
+    r, col = repo
+    ln = link()
+    r.add(ln)
+    assert col.insert_one.call_args.args[0] == ln.model_dump()
+
+
+def test_delete_is_owner_scoped(repo):
+    r, col = repo
+    r.delete("bob", "j1")
+    assert col.delete_one.call_args.args[0] == {"owner": "bob", "jti": "j1"}
+
+
+def test_exists_true_and_false(repo):
+    r, col = repo
+    col.find_one.return_value = {"jti": "j1"}
+    assert r.exists("j1") is True
+    col.find_one.return_value = None
+    assert r.exists("j1") is False
+
+
+def test_list_for_owner_projects_id_and_rebuilds_links(repo):
+    r, col = repo
+    col.find.return_value = iter([link().model_dump()])
+    result = r.list_for_owner("bob")
+    assert col.find.call_args.args == ({"owner": "bob"}, {"_id": 0})
+    assert len(result) == 1
+    assert isinstance(result[0], ShareLink)
