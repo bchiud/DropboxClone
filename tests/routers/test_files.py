@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 from app.application.file_service import MissingBlocks
 from app.auth_dependencies import get_current_user
-from app.dependencies import get_connection_manager, get_file_service
+from app.dependencies import get_connection_manager, get_file_service, get_share_service
 from app.models.file import FileRecord, FileSummary
 from app.main import app
 
@@ -36,6 +36,14 @@ class FakeService:
                 block_hashes=["h1", "h2"], updated_at=datetime.now(UTC),
             )
         raise FileNotFoundError(path)
+
+
+class FakeShareService:
+    def __init__(self, allow):
+        self.allow = allow
+
+    def can_read(self, requester, owner, path):
+        return self.allow
 
 
 @pytest.fixture
@@ -83,6 +91,33 @@ def test_recipe_returns_block_hashes(client):
 def test_recipe_missing_returns_404(client):
     resp = client.get("/files/recipe", params={"path": "/nope.txt"})
     assert resp.status_code == 404
+
+
+# --- share-aware reads ---
+
+def test_recipe_reads_a_shared_file_by_owner():
+    app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_current_user] = lambda: "alice"
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService(allow=True)
+    try:
+        resp = TestClient(app).get(
+            "/files/recipe", params={"path": "/known.txt", "owner": "bob"})
+        assert resp.status_code == 200
+        assert resp.json()["block_hashes"] == ["h1", "h2"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_recipe_without_grant_returns_404():
+    app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_current_user] = lambda: "alice"
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService(allow=False)
+    try:
+        resp = TestClient(app).get(
+            "/files/recipe", params={"path": "/known.txt", "owner": "bob"})
+        assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
 
 
 # --- commit notifies over WebSocket ---

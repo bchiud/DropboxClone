@@ -30,3 +30,22 @@ def decode_access_token(token: str) -> str | None:
         return payload.get("sub")
     except jwt.InvalidTokenError:
         return None
+
+
+def create_share_token(owner: str, path: str) -> str:
+    payload = {
+        "typ": "share",
+        "owner": owner,
+        "path": path,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_share_token(token: str) -> tuple[str, str] | None:
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("typ") != "share":
+        return None
+    return payload["owner"], payload["path"]

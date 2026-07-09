@@ -44,3 +44,27 @@ def test_expired_token_returns_none(monkeypatch):
 
 def test_garbage_token_returns_none():
     assert security.decode_access_token("not.a.jwt") is None
+
+
+# --- share-link tokens ---
+
+def test_share_token_round_trip_returns_owner_and_path():
+    token = security.create_share_token("bob", "/x.txt")
+    assert security.decode_share_token(token) == ("bob", "/x.txt")
+
+
+def test_access_token_is_rejected_by_share_decoder():
+    # same secret, but the missing typ="share" claim must not be readable as a link
+    token = security.create_access_token("bob")
+    assert security.decode_share_token(token) is None
+
+
+def test_forged_share_token_with_wrong_secret_returns_none():
+    forged = jwt.encode(
+        {"typ": "share", "owner": "mallory", "path": "/x.txt"},
+        "not-the-secret", algorithm="HS256")
+    assert security.decode_share_token(forged) is None
+
+
+def test_garbage_share_token_returns_none():
+    assert security.decode_share_token("not.a.jwt") is None
