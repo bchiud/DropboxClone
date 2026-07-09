@@ -1,4 +1,8 @@
-import { useEffect, useState } from "react";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
+import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
+import LogoutIcon from "@mui/icons-material/Logout";
+import ShareIcon from "@mui/icons-material/Share";
 import {
   Alert,
   Box,
@@ -9,13 +13,11 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import CloudUploadIcon from "@mui/icons-material/CloudUpload";
-import DownloadIcon from "@mui/icons-material/Download";
-import LogoutIcon from "@mui/icons-material/Logout";
-import ShareIcon from "@mui/icons-material/Share";
+import { useEffect, useState } from "react";
 import {
   commit,
   connectChanges,
+  deleteFile,
   downloadUrls,
   listFiles,
   missingBlocks,
@@ -114,6 +116,21 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
     }
   }
 
+  // --- remove ---
+  async function remove(f: FileSummary) {
+    if (!window.confirm(`Delete ${f.path}?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteFile(f.path);
+      await refresh();
+    } catch {
+      setError("Delete failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // --- render ---
   function toggleShare(path: string) {
     setOpenPath(openPath === path ? null : path);
@@ -179,6 +196,15 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
                 onClick={() => toggleShare(f.path)}
               >
                 Share
+              </Button>
+              <Button
+                size="small"
+                startIcon={<DeleteIcon />}
+                onClick={() => remove(f)}
+                disabled={busy}
+                sx={{ color: "error.light" }}
+              >
+                Delete
               </Button>
             </Stack>
             {openPath === f.path && <SharePanel path={f.path} />}

@@ -57,6 +57,21 @@ def test_get_returns_none_when_missing_without_raising(repo):
     assert r.get("u", "/missing") is None
 
 
+def test_delete_returns_true_when_a_doc_was_removed(repo):
+    r, col = repo
+    col.delete_one.return_value = MagicMock(deleted_count=1)
+    assert r.delete("u", "/a.txt") is True
+    assert col.delete_one.call_args.kwargs["filter"] == {"owner": "u", "path": "/a.txt"}
+
+
+def test_delete_returns_false_when_nothing_matched(repo):
+    # owner scoping: a filter that matches no doc (wrong owner, or already gone)
+    # removes nothing and reports False, which the service turns into a 404.
+    r, col = repo
+    col.delete_one.return_value = MagicMock(deleted_count=0)
+    assert r.delete("u", "/missing") is False
+
+
 def test_list_for_owner_projects_and_returns_summaries(repo):
     r, col = repo
     col.find.return_value = iter([

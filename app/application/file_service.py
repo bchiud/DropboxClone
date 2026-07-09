@@ -40,10 +40,7 @@ class FileService:
             for h in hashes
         }
 
-    def commit_file(
-            self, owner: str, path: str, size: int,
-            block_hashes: list[str],
-    ) -> FileRecord:
+    def commit_file(self, owner: str, path: str, size: int, block_hashes: list[str]) -> FileRecord:
         missing = self.missing_blocks(owner, block_hashes)
         if missing:
             raise MissingBlocks(missing)
@@ -57,6 +54,10 @@ class FileService:
         )
         self._file_repository.save(fileRecord)
         return fileRecord
+
+    def delete_file(self, owner: str, path: str) -> None:
+        if not self._file_repository.delete(owner, path):
+            raise FileNotFoundError(f"{owner}:{path}")
 
     def get_recipe(self, owner: str, path: str) -> FileRecord:
         fileRecord: FileRecord = self._file_repository.get(owner, path)

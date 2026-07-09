@@ -27,6 +27,9 @@ def test_complete_implementation_instantiates():
         def get(self, owner, path):
             return None
 
+        def delete(self, owner, path):
+            return False
+
         def list_for_owner(self, owner):
             return []
 

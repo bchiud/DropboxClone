@@ -593,8 +593,8 @@ Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
   re-fetching per request; presigned GETs work behind a CDN.
 - **Bounded metadata growth.** A **TTL index** on `share_links.expires_at` auto-reaps
   dead links (they're already inert, but they accumulate — see the sharing tradeoffs).
-- **Garbage collection that scales.** Once file delete ships, orphaned blocks
-  become real. The one-shot full-scan audit (`scripts/audit_storage.py`) is fine at
+- **Garbage collection that scales.** Now that file delete ships, orphaned blocks
+  are real. The one-shot full-scan audit (`scripts/audit_storage.py`) is fine at
   this size but won't scale — the endgame is **per-block reference counting** or an
   incremental mark-and-sweep, not a full bucket + collection scan.
 
@@ -616,18 +616,20 @@ pull instantly instead of polling),
 with **expiry and revocation** — an `exp` claim plus a `jti` allowlist in Mongo —
 all gated by an authorization layer that never touches storage),
 **web UI** (React + Vite: auth, file list, upload, hash-verified download,
-sharing — grant to a user, mint/copy/revoke public links, and a no-auth public
-download page), 100% test coverage.
+delete, sharing — grant to a user, mint/copy/revoke public links, and a no-auth
+public download page),
+**file deletion** (`DELETE /files`, owner-scoped from the token; removes the
+recipe only and leaves blocks for GC),
+**data-integrity constraint** (unique index on `username`), 100% test coverage.
 
 **Next:**
-- Web UI: real-time refresh (wire the `/ws` WebSocket so an upload on one device
-  updates another's file list live, instead of on manual reload).
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file).
 - Content-defined chunking (so delta survives insertions).
 - Streaming chunking for very large files (avoid reading whole file into memory).
 - Multi-server scaling: Redis pub/sub behind the WebSocket ConnectionManager.
+- Orphaned-block garbage collection — now unlocked, since delete is the first
+  operation that creates real orphans; `scripts/audit_storage.py` is the cleanup
+  path, and a scheduled mark-and-sweep GC finally has a use case.
 
-**Hardening backlog:** unique index on `username`, file delete + orphaned-block
-garbage collection, file versioning (conflict copies), refresh tokens,
-content-defined chunking.
+**Hardening backlog:** file versioning (conflict copies), refresh tokens.
 ```

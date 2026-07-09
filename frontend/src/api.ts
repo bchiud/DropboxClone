@@ -99,6 +99,12 @@ export async function recipe(path: string, owner?: string): Promise<Recipe> {
   return data;
 }
 
+export async function deleteFile(path: string): Promise<void> {
+  const url = new URL("/files", window.location.origin);
+  url.searchParams.set("path", path);
+  await request(url.toString(), { method: "DELETE" });
+}
+
 // --- blocks ---
 
 export async function missingBlocks(hashes: string[]): Promise<string[]> {

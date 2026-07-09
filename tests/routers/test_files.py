@@ -37,6 +37,10 @@ class FakeService:
             )
         raise FileNotFoundError(path)
 
+    def delete_file(self, owner, path):
+        if path != "/known.txt":
+            raise FileNotFoundError(path)
+
 
 class FakeShareService:
     def __init__(self, allow):
@@ -91,6 +95,45 @@ def test_recipe_returns_block_hashes(client):
 def test_recipe_missing_returns_404(client):
     resp = client.get("/files/recipe", params={"path": "/nope.txt"})
     assert resp.status_code == 404
+
+
+# --- delete ---
+
+def test_delete_returns_204(client):
+    resp = client.delete("/files", params={"path": "/known.txt"})
+    assert resp.status_code == 204
+    assert resp.content == b""  # 204 carries no body
+
+
+def test_delete_missing_returns_404(client):
+    resp = client.delete("/files", params={"path": "/nope.txt"})
+    assert resp.status_code == 404
+
+
+def test_delete_notifies_owner_on_success():
+    manager = AsyncMock()
+    app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.dependency_overrides[get_connection_manager] = lambda: manager
+    try:
+        resp = TestClient(app).delete("/files", params={"path": "/known.txt"})
+        assert resp.status_code == 204
+        manager.notify.assert_awaited_once_with("test-user")
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_does_not_notify_on_404():
+    manager = AsyncMock()
+    app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    app.dependency_overrides[get_connection_manager] = lambda: manager
+    try:
+        resp = TestClient(app).delete("/files", params={"path": "/nope.txt"})
+        assert resp.status_code == 404
+        manager.notify.assert_not_awaited()
+    finally:
+        app.dependency_overrides.clear()
 
 
 # --- share-aware reads ---

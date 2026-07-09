@@ -46,6 +46,20 @@ async def commit(
     }
 
 
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+async def delete(
+        path: str,
+        file_service: FileService = Depends(get_file_service),
+        connection_manager: ConnectionManager = Depends(get_connection_manager),
+        current_user: str = Depends(get_current_user),
+) -> None:
+    try:
+        file_service.delete_file(owner=current_user, path=path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+    await connection_manager.notify(current_user)
+
+
 @router.get("/recipe")
 def recipe(
         path: str,

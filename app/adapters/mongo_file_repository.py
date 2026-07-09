@@ -1,6 +1,7 @@
 from typing import Any, Mapping
 
 from pymongo.collection import Collection
+from pymongo.results import DeleteResult
 from pymongo.synchronous.cursor import Cursor
 
 from app.models.file import FileRecord, FileSummary
@@ -21,6 +22,10 @@ class MongoFileRepository(FileRepository):
     def get(self, owner: str, path: str) -> FileRecord | None:
         doc: Mapping[str, Any] | None | Any = self._collection.find_one(filter={"owner": owner, "path": path})
         return FileRecord(**doc) if doc else None
+
+    def delete(self, owner: str, path: str) -> bool:
+        result: DeleteResult = self._collection.delete_one(filter={"owner": owner, "path": path})
+        return result.deleted_count > 0
 
     def list_for_owner(self, owner: str) -> list[FileSummary]:
         docs: Cursor = self._collection.find(

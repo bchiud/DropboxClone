@@ -40,6 +40,9 @@ class FakeFileRepository(FileRepository):
     def get(self, owner, path) -> FileRecord | None:
         return self.records.get((owner, path))
 
+    def delete(self, owner, path) -> bool:
+        return self.records.pop((owner, path), None) is not None
+
     def list_for_owner(self, owner) -> list[FileSummary]:
         return [
             FileSummary(**r.model_dump())
@@ -104,6 +107,30 @@ def test_get_recipe_missing_raises(service):
     svc, _, _ = service
     with pytest.raises(FileNotFoundError):
         svc.get_recipe("u", "/nope.txt")
+
+
+def test_delete_file_removes_the_record(service):
+    svc, store, repo = service
+    store.blocks[FileService._block_key("u", "h1")] = b"x"
+    svc.commit_file("u", "/a.txt", 5, ["h1"])
+    svc.delete_file("u", "/a.txt")
+    assert repo.get("u", "/a.txt") is None
+
+
+def test_delete_file_leaves_blocks_for_gc(service):
+    # deletion removes the recipe only; the block survives for GC to reclaim.
+    svc, store, repo = service
+    key = FileService._block_key("u", "h1")
+    store.blocks[key] = b"x"
+    svc.commit_file("u", "/a.txt", 5, ["h1"])
+    svc.delete_file("u", "/a.txt")
+    assert key in store.blocks
+
+
+def test_delete_file_missing_raises(service):
+    svc, _, _ = service
+    with pytest.raises(FileNotFoundError):
+        svc.delete_file("u", "/nope.txt")
 
 
 def test_list_files_returns_summaries(service):
