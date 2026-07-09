@@ -2,7 +2,7 @@ import datetime
 
 from app.domain import security
 from app.models.user import User
-from app.ports.user_repository import UserRepository
+from app.ports.user_repository import UserRepository, UsernameAlreadyExists
 
 
 class UsernameTaken(Exception):
@@ -25,7 +25,10 @@ class AuthService:
             password_hash=security.hash_password(password),
             created_at=datetime.datetime.now(datetime.UTC),
         )
-        self._user_repository.save(user)
+        try:
+            self._user_repository.save(user)
+        except UsernameAlreadyExists:
+            raise UsernameTaken(username)
         return user
 
     def authenticate(self, username: str, password: str) -> str:

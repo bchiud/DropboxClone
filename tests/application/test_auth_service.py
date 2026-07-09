@@ -11,7 +11,7 @@ from app.application.auth_service import (
 )
 from app.domain import security
 from app.models.user import User
-from app.ports.user_repository import UserRepository
+from app.ports.user_repository import UserRepository, UsernameAlreadyExists
 
 
 class FakeUserRepository(UserRepository):
@@ -42,6 +42,19 @@ def test_register_duplicate_username_raises(auth):
     auth.register("alice", "x")
     with pytest.raises(UsernameTaken):
         auth.register("alice", "y")
+
+
+def test_register_translates_repo_duplicate_into_username_taken():
+    # Race path: the pre-check passes (get returns None), but the repo's insert
+    # loses the race and raises UsernameAlreadyExists (the unique index firing).
+    # The service must map that to the same UsernameTaken the caller expects.
+    class RacingRepo(FakeUserRepository):
+        def save(self, user: User):
+            raise UsernameAlreadyExists(user.username)
+
+    auth = AuthService(RacingRepo())
+    with pytest.raises(UsernameTaken):
+        auth.register("alice", "x")
 
 
 def test_authenticate_valid_returns_token(auth):

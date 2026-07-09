@@ -3,6 +3,10 @@ from abc import ABC, abstractmethod
 from app.models.user import User
 
 
+class UsernameAlreadyExists(Exception):
+    pass
+
+
 class UserRepository(ABC):
     @abstractmethod
     def get_by_username(self, username: str) -> dict | None: ...

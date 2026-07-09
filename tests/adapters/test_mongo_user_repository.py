@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from app.adapters.mongo_user_repository import MongoUserRepository
 from app.models.user import User
-from app.ports.user_repository import UserRepository
+from app.ports.user_repository import UserRepository, UsernameAlreadyExists
 
 
 @pytest.fixture
@@ -42,11 +43,21 @@ def test_get_by_username_returns_none_when_missing(repo):
     assert r.get_by_username("nobody") is None
 
 
-def test_save_dumps_model_and_upserts_with_username_filter(repo):
+def test_init_creates_unique_username_index(repo):
+    _, col = repo
+    col.create_index.assert_called_once_with("username", unique=True)
+
+
+def test_save_inserts_the_dumped_model(repo):
     r, col = repo
     user = User(username="bob", password_hash="h", created_at=datetime.now(UTC))
     r.save(user)
-    kwargs = col.replace_one.call_args.kwargs
-    assert kwargs["filter"] == {"username": "bob"}
-    assert kwargs["replacement"] == user.model_dump()
-    assert kwargs["upsert"] is True
+    col.insert_one.assert_called_once_with(user.model_dump())
+
+
+def test_save_translates_duplicate_key_into_username_already_exists(repo):
+    r, col = repo
+    col.insert_one.side_effect = DuplicateKeyError("dup")
+    user = User(username="bob", password_hash="h", created_at=datetime.now(UTC))
+    with pytest.raises(UsernameAlreadyExists):
+        r.save(user)
