@@ -9,13 +9,16 @@ import {
   type FileSummary,
 } from "./api";
 import { chunkFile, sha256Hex } from "./crypto";
+import { SharePanel } from "./shares";
 
 export function FileList({ onLogout }: { onLogout: () => void }) {
+  // --- state ---
   const [files, setFiles] = useState<FileSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-
   const [busy, setBusy] = useState(false);
+  const [openPath, setOpenPath] = useState<string | null>(null);
 
+  // --- data loading ---
   async function refresh() {
     try {
       setFiles(await listFiles());
@@ -24,6 +27,11 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
     }
   }
 
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  // --- upload ---
   async function upload(file: File) {
     setBusy(true);
     setError(null);
@@ -52,6 +60,8 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
       setBusy(false);
     }
   }
+
+  // --- download ---
   async function download(f: FileSummary) {
     setBusy(true);
     setError(null);
@@ -71,7 +81,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
         parts.push(bytes);
       }
 
-      const blob = new Blob(parts);
+      const blob = new Blob(parts, { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -86,9 +96,10 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
     }
   }
 
-  useEffect(() => {
-    refresh();
-  }, []);
+  // --- render ---
+  function toggleShare(path: string) {
+    setOpenPath(openPath === path ? null : path);
+  }
 
   return (
     <div>
@@ -111,6 +122,8 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
             <button onClick={() => download(f)} disabled={busy}>
               Download
             </button>
+            <button onClick={() => toggleShare(f.path)}>Share</button>
+            {openPath === f.path && <SharePanel path={f.path} />}
           </li>
         ))}
       </ul>

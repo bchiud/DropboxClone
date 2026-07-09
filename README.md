@@ -422,6 +422,34 @@ python -m client --server http://127.0.0.1:8000 \
 | `--once` | off | sync once and exit (no watching) |
 | `--poll` | `10` | seconds between remote-change pulls |
 
+### 4. Launch the web UI (optional)
+
+A React + Vite single-page app in `frontend/` gives you a browser client:
+register/login, list files, upload (with block-level dedup), and download
+(with on-read hash verification) — all bytes go **browser → B2 directly** via
+presigned URLs, exactly like the Python client.
+
+```bash
+cd frontend
+npm install                     # once
+npm run dev                     # serves on http://localhost:5173
+```
+
+Keep the API server (step 2) running in another terminal. Vite proxies the API
+routes (`/auth`, `/files`, `/blocks`, `/shares`, `/link`, `/ws`) to
+`http://127.0.0.1:8000`, so there's no CORS setup for local dev. Open
+**http://localhost:5173** and register or log in.
+
+> Because the browser PUTs/GETs block bytes straight to B2, the bucket needs a
+> CORS rule allowing your dev origin (`http://localhost:5173`) for `GET`, `PUT`,
+> and `HEAD`. Add your production origin to that rule when you deploy.
+
+| Script | What it does |
+|--------|--------------|
+| `npm run dev` | dev server with hot-reload on `:5173` |
+| `npm run build` | type-check (`tsc`) then bundle to `frontend/dist/` |
+| `npm run preview` | serve the production build locally |
+
 ## Demo: the whole system via `curl`
 
 With the server running (and `jq` installed), this walks through upload →
@@ -518,10 +546,13 @@ pull instantly instead of polling),
 **sharing & permissions** (read-only user-to-user grants + public share-links
 with **expiry and revocation** — an `exp` claim plus a `jti` allowlist in Mongo —
 all gated by an authorization layer that never touches storage),
-100% test coverage.
+**web UI** (React + Vite: auth, file list, upload, hash-verified download,
+sharing — grant to a user, mint/copy/revoke public links, and a no-auth public
+download page), 100% test coverage.
 
 **Next:**
-- Web UI.
+- Web UI: real-time refresh (wire the `/ws` WebSocket so an upload on one device
+  updates another's file list live, instead of on manual reload).
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file).
 - Content-defined chunking (so delta survives insertions).
 - Streaming chunking for very large files (avoid reading whole file into memory).
