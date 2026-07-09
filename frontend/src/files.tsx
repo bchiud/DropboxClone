@@ -24,6 +24,7 @@ import {
   type FileSummary,
 } from "./api";
 import { chunkFile, sha256Hex } from "./crypto";
+import { formatSize } from "./format";
 import { SharePanel } from "./shares";
 
 export function FileList({ onLogout }: { onLogout: () => void }) {
@@ -161,7 +162,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
               <Box sx={{ flexGrow: 1 }}>
                 <Typography>{f.path}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {f.size} bytes
+                  {formatSize(f.size)}
                 </Typography>
               </Box>
               <Button

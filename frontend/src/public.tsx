@@ -10,6 +10,7 @@ import {
 } from "@mui/material";
 import { linkDownloadUrls, linkRecipe, type Recipe } from "./api";
 import { sha256Hex } from "./crypto";
+import { formatSize } from "./format";
 
 export function PublicDownload({ token }: { token: string }) {
   // --- state ---
@@ -81,7 +82,7 @@ export function PublicDownload({ token }: { token: string }) {
       <Stack spacing={2}>
         <Typography variant="h4">Shared file</Typography>
         <Typography>
-          {rec.path.replace(/^\//, "")} — {rec.size} bytes
+          {rec.path.replace(/^\//, "")} — {formatSize(rec.size)}
         </Typography>
         <Button
           variant="contained"
