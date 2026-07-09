@@ -544,6 +544,66 @@ HTTP are mocked or faked, so the suite runs offline and deterministically.
 
 ---
 
+## Scaling
+
+A note on what it would take to run this for **large files** and **many users**.
+The short version: the *data plane* already scales, because content addressing +
+presigned direct-to-B2 transfer means **file bytes never touch the app server**.
+The work is almost all in the *control plane*.
+
+### Large files
+
+Two things are already right: block bytes go **browser/client → B2 directly**
+(the API only moves tiny JSON), and identical blocks transfer once (dedup). What
+starts to hurt:
+
+- **Unbounded fan-out.** A 50 GB file is ~12,000 blocks — today that's one giant
+  `upload-urls` response and (in the web client) 12,000 concurrent `PUT`s. Bound
+  the in-flight concurrency to a small pool (~6–10) and mint presigned URLs in
+  **batches** as the pool drains, rather than all at once.
+- **No resumability.** A dropped connection restarts the transfer. Content
+  addressing softens this (already-committed blocks are skipped by
+  `/blocks/missing`), but large blocks want **S3 multipart upload**, and the
+  client wants to **checkpoint** progress.
+- **Fixed-size chunking defeats dedup on edits.** Inserting one byte at the front
+  shifts every 4 MiB boundary, so every block hash changes. **Content-defined
+  chunking** (rolling hash, à la restic/borg) is the fix — the `chunker.split()`
+  seam is already isolated for exactly this swap.
+- **Whole-file reassembly in memory.** The download path collects every block into
+  one `Blob`/buffer — a huge file OOMs the tab or process. **Stream** to disk as
+  blocks arrive (File System Access API / a `ReadableStream`) instead.
+
+### Many users
+
+Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
+
+- **The WebSocket registry is single-process.** `realtime.ConnectionManager` holds
+  connections in memory, so the moment you run more than one uvicorn worker, a
+  commit on instance A can't notify a socket on instance B. This is the *first*
+  thing that breaks on horizontal scale. Fix: a **pub/sub bus** (Redis pub/sub or
+  a broker) so any instance can fan out `{"type":"changed"}` to any client — which
+  also removes the need for sticky WebSocket sessions.
+- **The app tier is nearly stateless already.** Auth is a stateless JWT and bytes
+  bypass the app, so FastAPI instances scale horizontally behind a load balancer
+  with autoscaling. The pub/sub bus above is what makes that fully true.
+- **Mongo indexing & sharding.** Add compound indexes on the hot paths
+  (`files` by `(owner, path)`, `share_links` by `jti`); at very large scale,
+  **shard on `owner`** so a user's files and blocks colocate.
+- **CDN in front of B2.** Cache public-link downloads at the edge instead of
+  re-fetching per request; presigned GETs work behind a CDN.
+- **Bounded metadata growth.** A **TTL index** on `share_links.expires_at` auto-reaps
+  dead links (they're already inert, but they accumulate — see the sharing tradeoffs).
+- **Garbage collection that scales.** Once file delete ships, orphaned blocks
+  become real. The one-shot full-scan audit (`scripts/audit_storage.py`) is fine at
+  this size but won't scale — the endgame is **per-block reference counting** or an
+  incremental mark-and-sweep, not a full bucket + collection scan.
+
+The highest-leverage single step is the **Redis pub/sub swap** behind
+`ConnectionManager`: it's small, and it's the thing that unlocks running more than
+one server at all.
+
+---
+
 ## Status & roadmap
 
 **Done:** content-addressed storage, chunking/dedup, REST API, JWT auth, full
