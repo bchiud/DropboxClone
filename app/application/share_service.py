@@ -36,7 +36,7 @@ class ShareService:
     def can_read(self, requester: str, owner: str, path: str) -> bool:
         return requester == owner or self._share_repository.exists(owner=owner, path=path, shared_with=requester)
 
-    # --- public link sharing ---
+    # --- public link management ---
 
     def create_link(self, owner: str, path: str) -> str:
         jti: str = uuid.uuid4().hex

@@ -47,7 +47,7 @@ async def list_outgoing(
     return share_service.list_outgoing(owner=current_user)
 
 
-### --- public link sharing ---
+# --- public link management ---
 
 @router.post("/link")
 async def create_share_link(
