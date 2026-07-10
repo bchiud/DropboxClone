@@ -75,3 +75,12 @@ def test_init_creates_the_link_indexes(repo):
     _, col = repo
     col.create_index.assert_any_call("jti", unique=True)   # exists() / delete()
     col.create_index.assert_any_call([("owner", 1), ("path", 1)])  # delete_all_for_path
+    col.create_index.assert_any_call("expires_at", expireAfterSeconds=0)  # TTL auto-reap
+
+
+def test_add_stores_expires_at_as_a_datetime(repo):
+    """Mongo's TTL reaper only fires on BSON Dates. A model_dump(mode="json") here
+    would serialise expires_at to a string, and the reaper would silently do nothing."""
+    r, col = repo
+    r.add(link())
+    assert isinstance(col.insert_one.call_args.args[0]["expires_at"], datetime)

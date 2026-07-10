@@ -253,7 +253,8 @@ The access pattern drove this, not the data volume:
 - **Pydantic is already the schema.** `.model_dump()` / `Model(**doc)` at the adapter
   boundary *is* the whole ORM — no migrations, no second schema to keep in sync.
 - **TTL indexes reap expiring rows for free** (`expires_at, expireAfterSeconds=0` on
-  `refresh_tokens`) — no cron job. Postgres needs `pg_cron` or a sweeper.
+  `refresh_tokens` and `share_links`) — no cron job. Postgres needs `pg_cron` or a
+  sweeper.
 - **Shard on `owner`** to scale out — a user's files and grants colocate (see
   [Scaling](#scaling)).
 
@@ -409,11 +410,12 @@ as *less code* (there is no `can_write`).
 
 The `exp` claim and the row's `expires_at` are a **single source of truth** —
 both computed once in `create_link`, so the JWT and the DB can never disagree.
+A **TTL index** on `share_links.expires_at` reaps dead rows within about a minute
+of expiry. It reclaims storage, not authority: `resolve_link` already rejects on
+the `exp` claim, so the lagging row was inert before Mongo swept it.
 
 **Tradeoffs (v1):**
 
-- **Expired rows linger** in `share_links` — they already fail the `exp` check,
-  so they're inert; a TTL index or a sweep can reap them later.
 - **Granting a nonexistent path** is silently accepted, creating a dangling grant
   that resolves to `404` on access.
 - **Deleting a file purges its grants — but not atomically.** `DELETE /files` runs
@@ -725,16 +727,14 @@ Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
 - **The app tier is nearly stateless already.** Auth is a stateless JWT and bytes
   bypass the app, so FastAPI instances scale horizontally behind a load balancer
   with autoscaling — and with the pub/sub bus shipped, that's now fully true.
-- **Mongo indexing & sharding.** The sharing collections are indexed — `shares` on
-  `(owner, path, shared_with)` unique (whose leftmost prefix also serves the
-  `(owner, path)` purge) plus `shared_with` alone for the recipient's list;
-  `share_links` on `jti` unique and `(owner, path)`. Still missing: `files` by
-  `(owner, path)`. At very large scale, **shard on `owner`** so a user's files and
-  blocks colocate.
+- **Mongo indexing & sharding.** Every hot query is indexed — `files` on
+  `(owner, path)` unique; `shares` on `(owner, path, shared_with)` unique (whose
+  leftmost prefix also serves the `(owner, path)` purge) plus `shared_with` alone
+  for the recipient's list; `share_links` on `jti` unique, `(owner, path)`, and a
+  TTL on `expires_at`. At very large scale, **shard on `owner`** so a user's files
+  and blocks colocate.
 - **CDN in front of B2.** Cache public-link downloads at the edge instead of
   re-fetching per request; presigned GETs work behind a CDN.
-- **Bounded metadata growth.** A **TTL index** on `share_links.expires_at` auto-reaps
-  dead links (they're already inert, but they accumulate — see the sharing tradeoffs).
 - **Garbage collection that scales.** Now that file delete ships, orphaned blocks
   are real. The one-shot full-scan audit (`scripts/audit_storage.py` — phantom
   files, orphaned blocks, orphaned grants) is fine at this size but won't scale —
@@ -766,7 +766,8 @@ volume grows.
   cross-use; the web session survives reload and auto-refreshes on a 401.
 - **Web UI** — React + Vite: tabbed "Your files" / "Shared with you", upload,
   hash-verified download, delete, full sharing, no-auth public download page.
-- **Indexes** — unique on `username`, `jti`, and the grant triple.
+- **Indexes** — unique on `username`, `jti`, `(owner, path)`, and the grant triple;
+  TTL reap on expiring `refresh_tokens` and `share_links`.
 - **100% backend coverage**, plus frontend unit tests.
 
 **Next:**

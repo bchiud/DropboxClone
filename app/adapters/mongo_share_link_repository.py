@@ -10,6 +10,7 @@ class MongoShareLinkRepository(ShareLinkRepository):
         self._collection = collection
         self._collection.create_index("jti", unique=True)
         self._collection.create_index([("owner", 1), ("path", 1)])
+        self._collection.create_index("expires_at", expireAfterSeconds=0)
 
     def add(self, link: ShareLink) -> None:
         self._collection.insert_one(link.model_dump())
