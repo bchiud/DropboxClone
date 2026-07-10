@@ -28,6 +28,7 @@ def test_defaults_applied():
     assert s.s3_bucket == "dropbox-clone"
     assert s.jwt_algorithm == "HS256"
     assert s.access_token_expire_minutes == 60
+    assert s.s3_url_ttl_seconds == 300  # revocation window; see B2BlockStore
 
 
 @pytest.mark.parametrize("missing", sorted(REQUIRED))

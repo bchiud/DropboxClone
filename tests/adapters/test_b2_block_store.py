@@ -11,6 +11,8 @@ from botocore.exceptions import ClientError
 from app.adapters.b2_block_store import B2BlockStore
 from app.ports.block_store import BlockStore
 
+TTL = 42  # a sentinel, not the production default — see tests/test_config.py
+
 
 def client_error(code):
     return ClientError({"Error": {"Code": code}}, "Op")
@@ -19,7 +21,7 @@ def client_error(code):
 @pytest.fixture
 def store():
     client = MagicMock()
-    return B2BlockStore(client, "test-bucket"), client
+    return B2BlockStore(client, "test-bucket", TTL), client
 
 
 def test_is_a_block_store(store):
@@ -45,6 +47,31 @@ def test_presigned_get_url_signs_get_object(store):
     args = client.generate_presigned_url.call_args
     assert args.args[0] == "get_object"
     assert args.kwargs["Params"] == {"Bucket": "test-bucket", "Key": "h1"}
+
+
+def test_both_presigned_urls_expire_per_injected_ttl(store):
+    s, client = store
+    s.presigned_put_url("h1")
+    assert client.generate_presigned_url.call_args.kwargs["ExpiresIn"] == TTL
+    s.presigned_get_url("h1")
+    assert client.generate_presigned_url.call_args.kwargs["ExpiresIn"] == TTL
+
+
+@pytest.mark.parametrize("ttl", [60, 900])
+def test_presigned_url_ttl_is_not_hardcoded(ttl):
+    """Regression: ExpiresIn was a literal 3600, so revoking a grant left it readable
+    for an hour. Asserting one sentinel can't distinguish 'reads the TTL' from 'happens
+    to equal it' — vary the injected value and prove the URL tracks it."""
+    client = MagicMock()
+    B2BlockStore(client, "b", ttl).presigned_get_url("h1")
+    assert client.generate_presigned_url.call_args.kwargs["ExpiresIn"] == ttl
+
+
+def test_url_ttl_has_no_default():
+    """Wiring it is not optional: a forgotten arg must fail loudly, never fall back
+    to some shipped default that silently widens the revocation window."""
+    with pytest.raises(TypeError):
+        B2BlockStore(MagicMock(), "b")
 
 
 def test_bucket_and_client_injected(store):

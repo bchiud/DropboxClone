@@ -400,13 +400,17 @@ as *less code* (there is no `can_write`).
 
 - **What it kills.** `DELETE /shares` and `DELETE /shares/link/{jti}` take effect on
   the next `can_read` / `resolve_link`.
-- **What it can't.** A presigned URL already handed out. `B2BlockStore` signs GETs
-  with `ExpiresIn=3600`, and B2 has never heard of the `shares` collection — so a
-  recipient who fetched download URLs a minute before you revoked keeps them for
-  up to an hour.
-- **Why it's inherent.** The same presigned direct-to-B2 transfer that keeps file
-  bytes off the app server. Shortening `ExpiresIn` narrows the window (300s is
-  ample) at the cost of large multi-block downloads needing fresh URLs mid-flight.
+- **What it can't.** A presigned URL already handed out. B2 has never heard of the
+  `shares` collection, so a recipient who fetched download URLs just before you
+  revoked keeps them until those URLs expire.
+- **How long.** `s3_url_ttl_seconds` (default **300**) bounds the window. It used to
+  be an hour.
+- **Why a window exists at all.** The same presigned direct-to-B2 transfer that keeps
+  file bytes off the app server. The floor is set by the slowest legitimate download:
+  `download_urls` signs a whole recipe at once and the client walks the blocks
+  sequentially, so the TTL must outlast the entire transfer — at 4 MiB blocks and
+  1 MB/s that's ~300 MB before the last URL goes stale. Minting URLs in batches as
+  the client walks the recipe would decouple the two.
 
 The `exp` claim and the row's `expires_at` are a **single source of truth** —
 both computed once in `create_link`, so the JWT and the DB can never disagree.
@@ -469,6 +473,8 @@ All config comes from a `.env` file (see `.env.example`). Secrets are **required
 ```
 MONGODB_URI, MONGODB_DB
 S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION, S3_BUCKET
+S3_URL_TTL_SECONDS=300            # optional — presigned-URL lifetime; also the
+                                  #   revocation window. Raise for slow, large downloads.
 JWT_SECRET                        # required; generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
 JWT_ALGORITHM=HS256               # optional
 ACCESS_TOKEN_EXPIRE_MINUTES=60    # optional
@@ -760,7 +766,8 @@ volume grows.
 - **Real-time** — `ChangeBus` over Redis pub/sub, so a commit on one server reaches
   a device on another. Each route notifies exactly the users whose view changed.
 - **Sharing** — user-to-user grants and public share-links, both revocable, links
-  also expiring. Authorization never touches storage.
+  also expiring. Authorization never touches storage. Revocation closes the read
+  window in 5 minutes (`s3_url_ttl_seconds`), bounded below by download speed.
 - **File deletion** — owner-scoped, cascades to grants and links before the recipe.
 - **Refresh tokens** — `jti` allowlist with TTL reap; `typ`-guarded against
   cross-use; the web session survives reload and auto-refreshes on a 401.
@@ -780,8 +787,6 @@ volume grows.
   finally has a use case.
 
 **Hardening backlog:**
-- Shorten the presigned-URL TTL (`ExpiresIn=3600` in `B2BlockStore`) so revoking a
-  grant or link closes the read window in minutes rather than an hour.
 - File versioning (conflict copies).
 - Refresh-token rotation (currently non-rotating).
 - httpOnly-cookie token storage (currently `localStorage`).

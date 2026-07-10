@@ -111,4 +111,4 @@ def get_block_store() -> BlockStore:
         aws_secret_access_key=settings.s3_secret_access_key,
         region_name=settings.s3_region,
     )
-    return B2BlockStore(s3, settings.s3_bucket)
+    return B2BlockStore(s3, settings.s3_bucket, settings.s3_url_ttl_seconds)

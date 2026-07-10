@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     s3_secret_access_key: str
     s3_region: str
     s3_bucket: str = "dropbox-clone"
+    # 4 MB blocks @ 1 MB/s = ~4.2s
+    # 300s @ 1 MB/s = ~300MB
+    # 300s @ 10 MB/s = ~2.9 GB
+    # to handle larger files, we'll need to increase this, OR better, mint URL batches as the client walks the recipe
+    s3_url_ttl_seconds: int = 300
 
     # Auth (JWT)
     jwt_secret: str
