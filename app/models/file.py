@@ -2,10 +2,12 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.models.types import RootedPath
+
 
 class FileBase(BaseModel):
     owner: str
-    path: str
+    path: RootedPath
     size: int
     updated_at: datetime
 
@@ -23,6 +25,6 @@ class BlockHashesRequest(BaseModel):
 
 
 class CommitFileRequest(BaseModel):
-    path: str
+    path: RootedPath
     size: int
     block_hashes: list[str]

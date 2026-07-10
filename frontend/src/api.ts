@@ -139,10 +139,11 @@ export async function listFiles(): Promise<FileSummary[]> {
 }
 
 export async function commit(
-  path: string,
+  name: string,
   size: number,
   block_hashes: string[],
 ): Promise<void> {
+  const path = "/" + name;
   await request("/files/commit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

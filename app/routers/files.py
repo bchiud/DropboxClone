@@ -5,6 +5,7 @@ from app.application.share_service import ShareService
 from app.auth_dependencies import get_current_user
 from app.dependencies import get_file_service, get_notifier, get_share_service
 from app.models.file import CommitFileRequest, FileRecord
+from app.models.types import RootedPath
 from app.realtime import Notifier
 
 router = APIRouter(
@@ -48,7 +49,7 @@ async def commit(
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def delete(
-        path: str,
+        path: RootedPath,
         file_service: FileService = Depends(get_file_service),
         notifier: Notifier = Depends(get_notifier),
         current_user: str = Depends(get_current_user),
@@ -62,7 +63,7 @@ async def delete(
 
 @router.get("/recipe")
 def recipe(
-        path: str,
+        path: RootedPath,
         owner: str | None = None,
         file_service: FileService = Depends(get_file_service),
         share_service: ShareService = Depends(get_share_service),

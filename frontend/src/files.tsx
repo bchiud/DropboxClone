@@ -26,7 +26,7 @@ import {
   type FileSummary,
 } from "./api";
 import { chunkFile, sha256Hex } from "./crypto";
-import { formatSize } from "./format";
+import { displayPath, downloadName, formatSize } from "./format";
 import { SharePanel } from "./shares";
 
 export function FileList({ onLogout }: { onLogout: () => void }) {
@@ -72,7 +72,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
         }),
       );
 
-      await commit("/" + file.name, file.size, allHashes); // record the recipe
+      await commit(file.name, file.size, allHashes); // record the recipe
       await refresh(); // reload the list
     } catch {
       setError("Upload failed");
@@ -105,7 +105,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = f.path.replace(/^\//, ""); // "/foo.txt" -> "foo.txt"
+      a.download = downloadName(f.path);
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -118,7 +118,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
 
   // --- remove ---
   async function remove(f: FileSummary) {
-    if (!window.confirm(`Delete ${f.path}?`)) return;
+    if (!window.confirm(`Delete ${displayPath(f.path)}?`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -177,7 +177,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
           <Paper key={f.path} variant="outlined" sx={{ p: 1 }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
               <Box sx={{ flexGrow: 1 }}>
-                <Typography>{f.path}</Typography>
+                <Typography>{displayPath(f.path)}</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {formatSize(f.size)}
                 </Typography>

@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
@@ -8,9 +7,10 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
+import { useEffect, useState } from "react";
 import { linkDownloadUrls, linkRecipe, type Recipe } from "./api";
 import { sha256Hex } from "./crypto";
-import { formatSize } from "./format";
+import { displayPath, downloadName, formatSize } from "./format";
 
 export function PublicDownload({ token }: { token: string }) {
   // --- state ---
@@ -50,7 +50,7 @@ export function PublicDownload({ token }: { token: string }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = rec.path.replace(/^\//, "");
+      a.download = downloadName(rec.path);
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -82,7 +82,7 @@ export function PublicDownload({ token }: { token: string }) {
       <Stack spacing={2}>
         <Typography variant="h4">Shared file</Typography>
         <Typography>
-          {rec.path.replace(/^\//, "")} — {formatSize(rec.size)}
+          {displayPath(rec.path)} — {formatSize(rec.size)}
         </Typography>
         <Button
           variant="contained"

@@ -22,6 +22,10 @@ class CorruptBlock(Exception):
     """A downloaded block's bytes don't match its hash (re-verify failed)."""
 
 
+class UnsafePath(ValueError):
+    """A server-supplied path resolves outside the sync folder."""
+
+
 class SyncEngine:
     def __init__(self, api: ApiClient, index: LocalIndex, folder: Path):
         self._api = api
@@ -32,7 +36,15 @@ class SyncEngine:
         return "/" + file.relative_to(self._folder).as_posix()
 
     def _local_path(self, server_path: str) -> Path:
-        return self._folder / server_path.lstrip("/")
+        # lstrip: an absolute right-hand side would discard the folder entirely.
+        # resolve: a symlinked component can escape a path that reads as canonical.
+        root = self._folder.resolve()
+        local = (root / server_path.lstrip("/")).resolve()
+        if not local.is_relative_to(root):
+            raise UnsafePath(f"path escapes the sync folder: {server_path!r}")
+        if local == root:
+            raise UnsafePath(f"path resolves to the sync folder itself: {server_path!r}")
+        return local
 
     # --- push: chunk -> negotiate -> upload only missing blocks -> commit ---
     def push(self) -> list[str]:

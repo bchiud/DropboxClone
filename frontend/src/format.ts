@@ -1,3 +1,11 @@
+export function displayPath(path: string): string {
+  return path.replace(/^\//, "");
+}
+
+export function downloadName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
 // Human-readable byte sizes: 500 -> "500 B", 1536 -> "1.5 KB", 5_000_000 -> "4.8 MB".
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
 

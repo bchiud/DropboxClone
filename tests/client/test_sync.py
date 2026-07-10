@@ -146,3 +146,44 @@ def test_sync_returns_pushed_and_pulled(setup):
     result = engine.sync()
     assert "/local.txt" in result["pushed"]
     assert "/remote.txt" in result["pulled"]
+
+
+def test_local_path_accepts_a_nested_path(setup):
+    engine, _, folder = setup
+    assert engine._local_path("/docs/a.txt") == (folder / "docs" / "a.txt").resolve()
+
+
+@pytest.mark.parametrize("server_path", ["/../evil.txt", "/../../evil.txt", "/docs/../../evil.txt"])
+def test_local_path_rejects_traversal(setup, server_path):
+    engine, _, _ = setup
+    with pytest.raises(ValueError, match="escapes the sync folder"):
+        engine._local_path(server_path)
+
+
+@pytest.mark.parametrize("server_path", ["/", "/."])
+def test_local_path_rejects_the_folder_itself(setup, server_path):
+    engine, _, _ = setup
+    with pytest.raises(ValueError, match="sync folder itself"):
+        engine._local_path(server_path)
+
+
+def test_local_path_rejects_a_symlinked_escape(setup, tmp_path):
+    """The string is canonical; only resolving the symlink reveals the escape.
+
+    No server-side validation of the path text can catch this — which is why the
+    containment check has to live next to the write.
+    """
+    engine, _, folder = setup
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (folder / "docs").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="escapes the sync folder"):
+        engine._local_path("/docs/a.txt")
+
+
+def test_pull_aborts_on_an_unsafe_server_path(setup):
+    engine, api, _ = setup
+    api.recipes["/../evil.txt"] = {"path": "/../evil.txt", "size": 0, "block_hashes": []}
+    with pytest.raises(ValueError, match="escapes the sync folder"):
+        engine.pull()
