@@ -19,8 +19,8 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
+import { connectChanges } from "./lib/changes";
 import {
-  connectChanges,
   createShareLink,
   listOutgoingShares,
   listShareLinks,
@@ -55,11 +55,10 @@ export function SharePanel({ path }: { path: string }) {
   useEffect(() => {
     refreshLinks();
     refreshGrants();
-    const ws = connectChanges(() => {
+    return connectChanges(() => {
       refreshLinks();
       refreshGrants();
     });
-    return () => ws.close();
   }, [path]);
 
   // --- actions ---

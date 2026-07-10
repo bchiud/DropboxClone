@@ -16,9 +16,9 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
+import { connectChanges } from "./lib/changes";
 import {
   commit,
-  connectChanges,
   deleteFile,
   downloadUrls,
   listFiles,
@@ -58,8 +58,7 @@ export function FileList() {
 
   useEffect(() => {
     refresh(); // initial load on mount
-    const ws = connectChanges(() => refresh()); // + live updates after
-    return () => ws.close();
+    return connectChanges(() => refresh()); // + live updates after
   }, []);
 
   // --- upload ---

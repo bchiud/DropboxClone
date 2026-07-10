@@ -10,6 +10,10 @@ export function setToken(t: string | null) {
 export function hasToken(): boolean {
   return token !== null;
 }
+/** For the change socket, which authenticates via query param, not a header. */
+export function getToken(): string | null {
+  return token;
+}
 
 function setRefreshToken(t: string | null) {
   if (t) localStorage.setItem(REFRESH_KEY, t);
@@ -303,15 +307,3 @@ export async function linkDownloadUrls(
   return data.urls;
 }
 
-// --- real time ---
-export function connectChanges(onChange: () => void): WebSocket {
-  const url = new URL("/ws", window.location.origin);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("token", token ?? "");
-  const ws = new WebSocket(url.toString());
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === "changed") onChange();
-  };
-  return ws;
-}

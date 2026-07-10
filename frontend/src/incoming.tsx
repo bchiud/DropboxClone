@@ -18,8 +18,8 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
+import { connectChanges } from "./lib/changes";
 import {
-  connectChanges,
   downloadUrls,
   listIncomingShares,
   recipe,
@@ -61,8 +61,7 @@ export function SharedWithMe() {
       }
     }
     load();
-    const ws = connectChanges(() => load());
-    return () => ws.close();
+    return connectChanges(() => load());
   }, []);
 
   async function download(share: Share) {

@@ -196,6 +196,7 @@ frontend/src/               # the web client — same delta engine, in the brows
 │
 └── lib/                   #   no JSX — everything that talks to the server
     ├── api.ts             #     typed fetch wrapper + token refresh on 401
+    ├── changes.ts         #     connectChanges (/ws socket, reconnect + backoff)
     ├── crypto.ts          #     chunkFile + sha256Hex (Web Crypto)
     ├── download.ts        #     assembleBlocks (fetch · verify · reassemble) + saveBlob
     └── format.ts          #     displayPath · middleTruncate · formatSize · userColor
@@ -575,11 +576,18 @@ via presigned URLs. It covers:
   another device. A **commit** notifies only the owner — a recipient's list shows
   grants, not file contents, so a new version changes nothing they can see.
 
-> **Caveat:** `connectChanges` does not reconnect. If the socket drops — sleep,
-> proxy idle-timeout, server redeploy — the view silently stops updating until
-> reload. Explicit refreshes after each action are what keep the UI correct; the
-> socket is an accelerator, not a dependency. SSE would give reconnect for free
-> (this traffic is one-way, so `EventSource` fits it better than a WebSocket does).
+> **Dropped sockets** — sleep, proxy idle-timeout, redeploy — reconnect with
+> exponential backoff (1s → 30s, jittered so a redeploy doesn't stampede every
+> client at once). Nothing replays the notifications missed while away, so a
+> successful *re*connect refetches. The socket stays an accelerator, not a
+> dependency: every action also refreshes explicitly, so a wedged socket degrades
+> the UI rather than corrupting it.
+>
+> This traffic is one-way and single-event, which is SSE's exact shape —
+> `EventSource` would have given reconnect and `Last-Event-ID` replay for free.
+> WebSockets are a defensible choice (FastAPI's support is first-class, and
+> `WebSocketDisconnect` makes server-side cleanup clean), but their bidirectional
+> and binary framing go entirely unused here.
 
 > The download path — fetch each block, re-verify `sha256(block) == hash`,
 > reassemble — lives once in `frontend/src/lib/download.ts` (`assembleBlocks`), shared
@@ -772,6 +780,7 @@ volume grows.
 - **Sync client** — folder watcher, push/pull, WebSocket-driven pull.
 - **Real-time** — `ChangeBus` over Redis pub/sub, so a commit on one server reaches
   a device on another. Each route notifies exactly the users whose view changed.
+  The client socket reconnects with jittered backoff and refetches on reopen.
 - **Sharing** — user-to-user grants and public share-links, both revocable, links
   also expiring. Authorization never touches storage. Revocation closes the read
   window in 5 minutes (`s3_url_ttl_seconds`), bounded below by download speed.
@@ -785,8 +794,6 @@ volume grows.
 - **100% backend coverage**, plus frontend unit tests.
 
 **Next:**
-- Reconnect-with-backoff for the change socket (or switch to SSE, which has it
-  built in) — today a dropped socket stops live updates until reload.
 - Content-defined chunking (so delta survives insertions). Fixed 4 MiB offsets mean
   a one-byte insertion at the front rewrites every block hash.
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file) —
