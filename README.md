@@ -113,6 +113,31 @@ production, in-process when `REDIS_URL` is unset.
                     Alice's sockets ✔                            (holds none) no-op
 ```
 
+#### Why WebSockets — and why SSE was the closer call
+
+The traffic is one-way and single-event: the server pushes `{"type":"changed"}`,
+the client refetches. Nothing ever flows client→server on that socket. That is
+**exactly** Server-Sent Events' shape, so the two were weighed:
+
+| | WebSocket (chosen) | SSE (`EventSource`) |
+|---|---|---|
+| **Fits one-way traffic** | over-spec'd — bidirectional + binary framing unused | purpose-built |
+| **Reconnect on drop** | hand-rolled (backoff, jitter, disposal guard) | free, built into the browser |
+| **Missed-event replay** | none — reconnect refetches instead | `Last-Event-ID`, if the server retains events |
+| **Auth** | no custom headers → token in query string | *same* — `EventSource` can't set headers either |
+| **Server (FastAPI)** | first-class: `@app.websocket`, `WebSocketDisconnect` | `StreamingResponse` + manual `text/event-stream` framing + `is_disconnected()` polling |
+| **Connections per origin** | not subject to the HTTP/1.1 limit | consumes one of ~6 (moot here: ≤2 streams, and block transfers hit B2's origin) |
+
+- **Reconnect had to be hand-rolled** — `EventSource` ships with it. The strongest
+  argument that SSE was the better fit.
+- **Replay isn't wanted anyway.** `Last-Event-ID` needs retained events (Redis
+  **Streams**, not pub/sub). Refetching on reconnect reconciles against current
+  state — strictly stronger, and the payload is empty regardless.
+
+**Verdict:** close call, and SSE is the better-matched primitive. WebSockets stay
+because the server side is genuinely simpler in FastAPI and the reconnect is now
+written and tested.
+
 ### Layers
 
 | Layer | Directory | Knows about | Example |
@@ -581,13 +606,8 @@ via presigned URLs. It covers:
 > client at once). Nothing replays the notifications missed while away, so a
 > successful *re*connect refetches. The socket stays an accelerator, not a
 > dependency: every action also refreshes explicitly, so a wedged socket degrades
-> the UI rather than corrupting it.
->
-> This traffic is one-way and single-event, which is SSE's exact shape —
-> `EventSource` would have given reconnect and `Last-Event-ID` replay for free.
-> WebSockets are a defensible choice (FastAPI's support is first-class, and
-> `WebSocketDisconnect` makes server-side cleanup clean), but their bidirectional
-> and binary framing go entirely unused here.
+> the UI rather than corrupting it. (Why a socket and not SSE:
+> [above](#why-websockets--and-why-sse-was-the-closer-call).)
 
 > The download path — fetch each block, re-verify `sha256(block) == hash`,
 > reassemble — lives once in `frontend/src/lib/download.ts` (`assembleBlocks`), shared
