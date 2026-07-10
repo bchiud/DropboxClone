@@ -69,3 +69,9 @@ def test_delete_all_for_path_reports_zero_when_nothing_matched(repo):
     r, col = repo
     col.delete_many.return_value = MagicMock(deleted_count=0)
     assert r.delete_all_for_path("bob", "/never-linked.txt") == 0
+
+
+def test_init_creates_the_link_indexes(repo):
+    _, col = repo
+    col.create_index.assert_any_call("jti", unique=True)   # exists() / delete()
+    col.create_index.assert_any_call([("owner", 1), ("path", 1)])  # delete_all_for_path

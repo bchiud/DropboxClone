@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends
 
 from app.application.share_service import ShareService
 from app.auth_dependencies import get_current_user
-from app.dependencies import get_share_service
+from app.dependencies import get_notifier, get_share_service
 from app.models.share import Share, ShareLink, ShareLinkRequest, ShareRequest
+from app.realtime import Notifier
 
 router = APIRouter(
     prefix="/shares",
@@ -18,8 +19,13 @@ async def create_share(
         share_request: ShareRequest,
         share_service: ShareService = Depends(get_share_service),
         current_user: str = Depends(get_current_user),
+        notifier: Notifier = Depends(get_notifier),
 ):
-    return share_service.share(owner=current_user, path=share_request.path, shared_with=share_request.shared_with)
+    share: Share = share_service.share(
+        owner=current_user, path=share_request.path, shared_with=share_request.shared_with,
+    )
+    await notifier.notify(share_request.shared_with)
+    return share
 
 
 @router.delete("", status_code=204)
@@ -27,8 +33,10 @@ async def delete_share(
         share_request: ShareRequest,
         share_service: ShareService = Depends(get_share_service),
         current_user: str = Depends(get_current_user),
+        notifier: Notifier = Depends(get_notifier),
 ):
-    return share_service.revoke(owner=current_user, path=share_request.path, shared_with=share_request.shared_with)
+    share_service.revoke(owner=current_user, path=share_request.path, shared_with=share_request.shared_with)
+    await notifier.notify(share_request.shared_with)
 
 
 @router.get("/incoming", response_model=list[Share])

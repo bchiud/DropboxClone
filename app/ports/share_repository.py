@@ -21,3 +21,6 @@ class ShareRepository(ABC):
 
     @abstractmethod
     def list_for_owner(self, owner: str) -> list[Share]: ...
+
+    @abstractmethod
+    def list_recipients_for_path(self, owner: str, path: str) -> list[str]: ...

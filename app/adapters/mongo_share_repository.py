@@ -8,6 +8,8 @@ from app.ports.share_repository import ShareRepository
 class MongoShareRepository(ShareRepository):
     def __init__(self, collection: Collection) -> None:
         self._collection = collection
+        self._collection.create_index([("owner", 1), ("path", 1), ("shared_with", 1)], unique=True)
+        self._collection.create_index("shared_with")
 
     def add(self, share: Share) -> None:
         self._collection.replace_one(
@@ -32,3 +34,7 @@ class MongoShareRepository(ShareRepository):
     def list_for_owner(self, owner: str) -> list[Share]:
         docs: Cursor = self._collection.find({"owner": owner}, {"_id": 0})
         return [Share(**doc) for doc in docs]
+
+    def list_recipients_for_path(self, owner: str, path: str) -> list[str]:
+        docs: Cursor = self._collection.find({"owner": owner, "path": path}, {"shared_with": 1, "_id": 0})
+        return [doc["shared_with"] for doc in docs]

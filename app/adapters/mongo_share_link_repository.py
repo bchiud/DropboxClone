@@ -8,6 +8,8 @@ from app.ports.share_link_repository import ShareLinkRepository
 class MongoShareLinkRepository(ShareLinkRepository):
     def __init__(self, collection: Collection) -> None:
         self._collection = collection
+        self._collection.create_index("jti", unique=True)
+        self._collection.create_index([("owner", 1), ("path", 1)])
 
     def add(self, link: ShareLink) -> None:
         self._collection.insert_one(link.model_dump())

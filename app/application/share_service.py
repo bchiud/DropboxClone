@@ -16,9 +16,11 @@ class ShareService:
         self._share_repository = share_repository
         self._share_link_repository = share_link_repository
 
-    def purge_for_file(self, owner: str, path: str) -> None:
+    def purge_for_file(self, owner: str, path: str) -> list[str]:
+        shared_withs: list[str] = self._share_repository.list_recipients_for_path(owner, path)
         self._share_repository.remove_all_for_path(owner, path)
         self._share_link_repository.delete_all_for_path(owner, path)
+        return shared_withs
 
     # --- user-to-user sharing ---
 

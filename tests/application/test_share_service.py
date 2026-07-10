@@ -20,6 +20,12 @@ class FakeShareRepository:
     def remove(self, owner: str, path: str, shared_with: str) -> None:
         self.shares.pop((owner, path, shared_with), None)
 
+    def list_recipients_for_path(self, owner: str, path: str) -> list[str]:
+        return [
+            s.shared_with for s in self.shares.values()
+            if s.owner == owner and s.path == path
+        ]
+
     def remove_all_for_path(self, owner: str, path: str) -> int:
         doomed = [k for k in self.shares if k[0] == owner and k[1] == path]
         for k in doomed:
@@ -234,3 +240,19 @@ def test_purge_for_file_kills_a_public_link(service):
 
     # the jti row is gone, so the still-valid token no longer resolves
     assert svc.resolve_link(token) is None
+
+
+def test_purge_for_file_returns_the_recipients_it_dropped(service):
+    """The router notifies exactly these users — their incoming list just changed."""
+    svc, _, _ = service
+    svc.share("bob", "/x.txt", "alice")
+    svc.share("bob", "/x.txt", "carol")
+    svc.share("bob", "/other.txt", "dave")   # different file
+    svc.share("erin", "/x.txt", "frank")     # same path, different owner
+
+    assert sorted(svc.purge_for_file("bob", "/x.txt")) == ["alice", "carol"]
+
+
+def test_purge_for_file_returns_empty_when_nothing_was_shared(service):
+    svc, _, _ = service
+    assert svc.purge_for_file("bob", "/never-shared.txt") == []

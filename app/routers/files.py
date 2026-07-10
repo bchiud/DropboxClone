@@ -56,11 +56,13 @@ async def delete(
         current_user: str = Depends(get_current_user),
 ) -> None:
     try:
-        share_service.purge_for_file(owner=current_user, path=path)
+        shared_withs: list[str] = share_service.purge_for_file(owner=current_user, path=path)
+        for shared_with in shared_withs:
+            await notifier.notify(shared_with)
         file_service.delete_file(owner=current_user, path=path)
+        await notifier.notify(current_user)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
-    await notifier.notify(current_user)
 
 
 @router.get("/recipe")

@@ -81,3 +81,37 @@ def test_remove_all_for_path_reports_zero_when_nothing_matched(repo):
     r, col = repo
     col.delete_many.return_value = MagicMock(deleted_count=0)
     assert r.remove_all_for_path("bob", "/never-shared.txt") == 0
+
+
+def test_list_recipients_for_path_queries_owner_and_path(repo):
+    r, col = repo
+    col.find.return_value = iter([share().model_dump()])
+    result = r.list_recipients_for_path("bob", "/x.txt")
+    # narrower than list_for_owner: scoped to one file, not the owner's whole set
+    # projecting only shared_with makes this a covered query — answerable from the
+    # (owner, path, shared_with) index without touching the documents
+    assert col.find.call_args.args == (
+        {"owner": "bob", "path": "/x.txt"}, {"shared_with": 1, "_id": 0},
+    )
+    assert result == ["alice"]  # usernames, not Share documents
+
+
+def test_list_recipients_for_path_is_eager(repo):
+    """The rows must be materialised before purge_for_file deletes them — a lazy
+    cursor would iterate to nothing after remove_all_for_path ran."""
+    r, col = repo
+    col.find.return_value = iter([share().model_dump()])
+    result = r.list_recipients_for_path("bob", "/x.txt")
+    assert isinstance(result, list)
+
+
+def test_init_creates_the_grant_indexes(repo):
+    _, col = repo
+    # the compound index enforces one row per grant AND serves exists() and, via
+    # its (owner, path) leftmost prefix, list_recipients_for_path / remove_all_for_path
+    col.create_index.assert_any_call(
+        [("owner", 1), ("path", 1), ("shared_with", 1)], unique=True
+    )
+    # a prefix of the compound index can't serve a shared_with-only query, so
+    # list_for_recipient (the "Shared with you" tab) needs its own
+    col.create_index.assert_any_call("shared_with")
