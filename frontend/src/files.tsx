@@ -1,13 +1,16 @@
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DownloadIcon from "@mui/icons-material/Download";
+import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import ShareIcon from "@mui/icons-material/Share";
 import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   LinearProgress,
   Paper,
+  Skeleton,
   Stack,
   Tooltip,
   Typography,
@@ -36,15 +39,18 @@ import { SharePanel } from "./shares";
 
 export function FileList() {
   // --- state ---
+  const [loading, setLoading] = useState(true);
   const [files, setFiles] = useState<FileSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false); // global: Upload button + progress bar
+  const [busyKey, setBusyKey] = useState<string | null>(null); // the one row in flight
   const [openPath, setOpenPath] = useState<string | null>(null);
 
   // --- data loading ---
   async function refresh() {
     try {
       setFiles(await listFiles());
+      setLoading(false);
     } catch {
       setError("Could not load files");
     }
@@ -58,7 +64,7 @@ export function FileList() {
 
   // --- upload ---
   async function upload(file: File) {
-    setBusy(true);
+    setUploading(true);
     setError(null);
     try {
       const blocks = await chunkFile(file); // [{hash, blob}, ...]
@@ -82,13 +88,13 @@ export function FileList() {
     } catch {
       setError("Upload failed");
     } finally {
-      setBusy(false);
+      setUploading(false);
     }
   }
 
   // --- download ---
   async function download(f: FileSummary) {
-    setBusy(true);
+    setBusyKey(f.path);
     setError(null);
     try {
       const rec = await recipe(f.path, f.owner);
@@ -99,14 +105,14 @@ export function FileList() {
       console.error(e);
       setError(e instanceof Error ? e.message : "Download failed");
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   }
 
   // --- remove ---
   async function remove(f: FileSummary) {
     if (!window.confirm(`Delete ${displayPath(f.path)}?`)) return;
-    setBusy(true);
+    setBusyKey(f.path);
     setError(null);
     try {
       await deleteFile(f.path);
@@ -114,7 +120,7 @@ export function FileList() {
     } catch {
       setError("Delete failed");
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   }
 
@@ -134,7 +140,7 @@ export function FileList() {
       <Button
         variant="contained"
         component="label"
-        disabled={busy}
+        disabled={uploading}
         startIcon={<CloudUploadIcon />}
         sx={{ mb: 1 }}
       >
@@ -148,55 +154,88 @@ export function FileList() {
           }}
         />
       </Button>
-      {busy && <LinearProgress sx={{ mb: 2 }} />}
+      {uploading && <LinearProgress sx={{ mb: 2 }} />}
 
-      <Stack spacing={1}>
-        {files.map((f) => (
-          <Paper key={f.path} variant="outlined" sx={{ p: 1 }}>
-            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-              {/* minWidth:0 lets this flex item shrink below its content,
-                  which is what allows the name to ellipsize */}
-              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                <Tooltip title={displayPath(f.path)} enterDelay={400}>
-                  <Typography noWrap>
-                    {middleTruncate(displayPath(f.path))}
-                  </Typography>
-                </Tooltip>
-                <Typography variant="body2" color="text.secondary">
-                  {formatSize(f.size)}
-                </Typography>
-              </Box>
-              <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
-                <Button
-                  size="small"
-                  startIcon={<DownloadIcon />}
-                  onClick={() => download(f)}
-                  disabled={busy}
-                >
-                  Download
-                </Button>
-                <Button
-                  size="small"
-                  startIcon={<ShareIcon />}
-                  onClick={() => toggleShare(f.path)}
-                >
-                  Share
-                </Button>
-                <Button
-                  size="small"
-                  startIcon={<DeleteIcon />}
-                  onClick={() => remove(f)}
-                  disabled={busy}
-                  sx={{ color: "error.light" }}
-                >
-                  Delete
-                </Button>
-              </Stack>
-            </Stack>
-            {openPath === f.path && <SharePanel path={f.path} />}
-          </Paper>
-        ))}
-      </Stack>
+      {!loading && !error && files.length === 0 ? (
+        <Paper
+          variant="outlined"
+          sx={{ p: 6, textAlign: "center", borderRadius: 2 }}
+        >
+          <FolderOpenOutlinedIcon
+            sx={{ fontSize: 44, color: "text.disabled" }}
+          />
+          <Typography sx={{ mt: 1.5, fontWeight: 500 }}>
+            No files yet
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Upload a file and it appears here.
+          </Typography>
+        </Paper>
+      ) : (
+        <Stack spacing={1}>
+          {loading
+            ? [0, 1, 2].map((i) => (
+                <Skeleton key={i} variant="rounded" height={56} />
+              ))
+            : files.map((f) => {
+                const rowBusy = busyKey === f.path;
+                return (
+                  <Paper key={f.path} variant="outlined" sx={{ p: 1 }}>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{ alignItems: "center" }}
+                    >
+                      {/* minWidth:0 lets this flex item shrink below its content, which is what allows the name to ellipsize */}
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Tooltip title={displayPath(f.path)} enterDelay={400}>
+                          <Typography noWrap>
+                            {middleTruncate(displayPath(f.path))}
+                          </Typography>
+                        </Tooltip>
+                        <Typography variant="body2" color="text.secondary">
+                          {formatSize(f.size)}
+                        </Typography>
+                      </Box>
+                      <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+                        <Button
+                          size="small"
+                          startIcon={
+                            rowBusy ? (
+                              <CircularProgress size={14} color="inherit" />
+                            ) : (
+                              <DownloadIcon />
+                            )
+                          }
+                          onClick={() => download(f)}
+                          disabled={rowBusy}
+                        >
+                          Download
+                        </Button>
+                        <Button
+                          size="small"
+                          startIcon={<ShareIcon />}
+                          onClick={() => toggleShare(f.path)}
+                        >
+                          Share
+                        </Button>
+                        <Button
+                          size="small"
+                          startIcon={<DeleteIcon />}
+                          onClick={() => remove(f)}
+                          disabled={rowBusy}
+                          sx={{ color: "error.light" }}
+                        >
+                          Delete
+                        </Button>
+                      </Stack>
+                    </Stack>
+                    {openPath === f.path && <SharePanel path={f.path} />}
+                  </Paper>
+                );
+              })}
+        </Stack>
+      )}
     </>
   );
 }
