@@ -209,7 +209,7 @@ export async function downloadUrls(
 
 // --- sharing ---
 
-export interface IncomingShare {
+export interface Share {
   owner: string;
   path: string;
   shared_with: string;
@@ -235,9 +235,27 @@ export async function shareWithUser(
   });
 }
 
-export async function listIncomingShares(): Promise<IncomingShare[]> {
+export async function revokeUserShare(
+  path: string,
+  sharedWith: string,
+): Promise<void> {
+  await request("/shares", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, shared_with: sharedWith }),
+  });
+}
+
+// files shared with me
+export async function listIncomingShares(): Promise<Share[]> {
   const res = await request("/shares/incoming");
-  return (await res.json()) as IncomingShare[];
+  return (await res.json()) as Share[];
+}
+
+// files i've shared
+export async function listOutgoingShares(): Promise<Share[]> {
+  const res = await request("/shares/outgoing");
+  return (await res.json()) as Share[];
 }
 
 // --- share links ---

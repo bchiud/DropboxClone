@@ -10,7 +10,7 @@ import {
 import LoginIcon from "@mui/icons-material/Login";
 import PersonAddIcon from "@mui/icons-material/PersonAdd";
 import { useRef, useState } from "react";
-import { ApiError, login, register } from "./api";
+import { ApiError, login, register } from "./lib/api";
 
 export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [username, setUsername] = useState("");

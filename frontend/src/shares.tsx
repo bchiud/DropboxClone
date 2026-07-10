@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
   Alert,
+  Avatar,
   Box,
   Button,
+  Chip,
   Divider,
   IconButton,
   InputAdornment,
@@ -10,6 +12,7 @@ import {
   ListItem,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddLinkIcon from "@mui/icons-material/AddLink";
@@ -18,16 +21,21 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import PersonAddIcon from "@mui/icons-material/PersonAdd";
 import {
   createShareLink,
+  listOutgoingShares,
   listShareLinks,
   revokeShareLink,
+  revokeUserShare,
   shareWithUser,
+  type Share,
   type ShareLink,
-} from "./api";
+} from "./lib/api";
+import { userColor } from "./lib/format";
 
 export function SharePanel({ path }: { path: string }) {
   // --- state ---
   const [recipient, setRecipient] = useState("");
   const [links, setLinks] = useState<ShareLink[]>([]);
+  const [grants, setGrants] = useState<Share[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState<string | null>(null);
 
@@ -37,8 +45,14 @@ export function SharePanel({ path }: { path: string }) {
     setLinks(all.filter((l) => l.path === path)); // only THIS file's links
   }
 
+  async function refreshGrants() {
+    const all = await listOutgoingShares();
+    setGrants(all.filter((g) => g.path === path)); // only THIS file's grants
+  }
+
   useEffect(() => {
     refreshLinks();
+    refreshGrants();
   }, [path]);
 
   // --- actions ---
@@ -47,8 +61,19 @@ export function SharePanel({ path }: { path: string }) {
       await shareWithUser(path, recipient);
       setStatus(`Shared with ${recipient}`);
       setRecipient("");
+      await refreshGrants();
     } catch {
       setStatus("Could not share");
+    }
+  }
+
+  async function revokeGrant(sharedWith: string) {
+    try {
+      await revokeUserShare(path, sharedWith);
+      setStatus(`Stopped sharing with ${sharedWith}`);
+      await refreshGrants();
+    } catch {
+      setStatus("Could not revoke");
     }
   }
 
@@ -107,6 +132,37 @@ export function SharePanel({ path }: { path: string }) {
           Share with user
         </Button>
       </Stack>
+
+      <Box sx={{ mb: 1.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          Shared with
+        </Typography>
+        {grants.length === 0 ? (
+          <Typography variant="body2" color="text.disabled">
+            No one yet
+          </Typography>
+        ) : (
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", mt: 0.5 }}>
+            {grants.map((g) => (
+              <Tooltip
+                key={g.shared_with}
+                title={`Stop sharing with ${g.shared_with}`}
+              >
+                <Chip
+                  size="small"
+                  label={g.shared_with}
+                  onDelete={() => revokeGrant(g.shared_with)}
+                  avatar={
+                    <Avatar sx={{ bgcolor: userColor(g.shared_with) }}>
+                      {g.shared_with.charAt(0).toUpperCase()}
+                    </Avatar>
+                  }
+                />
+              </Tooltip>
+            ))}
+          </Stack>
+        )}
+      </Box>
 
       <Stack spacing={1} sx={{ mb: 1 }}>
         <Button

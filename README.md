@@ -178,6 +178,22 @@ client/                     # the sync client — imports nothing from app/
 ├── ws_listener.py          #   WebSocket listener → pull on server "changed" push
 └── __main__.py             #   CLI entry point (python -m client)
 
+frontend/src/               # the web client — same delta engine, in the browser
+├── main.tsx               #   theme (light/dark) + StrictMode root
+├── App.tsx                #   session restore; public-link page vs logged-in app
+├── auth.tsx               #   Login: register / log in
+├── home.tsx               #   shell: header + "Your files" / "Shared with you" tabs
+├── files.tsx              #   FileList: upload · download · delete · share panel
+├── incoming.tsx           #   SharedWithMe: grants received, download by owner
+├── shares.tsx             #   SharePanel: grant/revoke a user · mint/revoke links
+├── public.tsx             #   PublicDownload: no-auth /?token=… page
+│
+└── lib/                   #   no JSX — everything that talks to the server
+    ├── api.ts             #     typed fetch wrapper + token refresh on 401
+    ├── crypto.ts          #     chunkFile + sha256Hex (Web Crypto)
+    ├── download.ts        #     assembleBlocks (fetch · verify · reassemble) + saveBlob
+    └── format.ts          #     displayPath · middleTruncate · formatSize · userColor
+
 tests/                      # mirrors app/ + client/ ; 100% coverage gate
 ```
 
@@ -364,10 +380,22 @@ as *less code* (there is no `can_write`).
     token fails signature-check before any DB lookup.
   - **Revocation** is an *allowlist*: minting writes a `share_links` row keyed on
     the token's `jti`, and a read only resolves while that row exists. `DELETE
-    /shares/link/{jti}` deletes it — instantly and irreversibly killing the link,
-    even though the signed token itself is still cryptographically valid. The same
-    row powers `GET /shares/link` (list your live links). Revoke is **owner-scoped**
-    (`{owner, jti}` filter), so no one can revoke a link they didn't mint.
+    /shares/link/{jti}` deletes it — killing the link even though the signed token
+    itself is still cryptographically valid. The same row powers `GET /shares/link`
+    (list your live links). Revoke is **owner-scoped** (`{owner, jti}` filter), so
+    no one can revoke a link they didn't mint.
+
+**Revocation stops future reads, not bytes already in flight.**
+
+- **What it kills.** `DELETE /shares` and `DELETE /shares/link/{jti}` take effect on
+  the next `can_read` / `resolve_link`.
+- **What it can't.** A presigned URL already handed out. `B2BlockStore` signs GETs
+  with `ExpiresIn=3600`, and B2 has never heard of the `shares` collection — so a
+  recipient who fetched download URLs a minute before you revoked keeps them for
+  up to an hour.
+- **Why it's inherent.** The same presigned direct-to-B2 transfer that keeps file
+  bytes off the app server. Shortening `ExpiresIn` narrows the window (300s is
+  ample) at the cost of large multi-block downloads needing fresh URLs mid-flight.
 
 The `exp` claim and the row's `expires_at` are a **single source of truth** —
 both computed once in `create_link`, so the JWT and the DB can never disagree.
@@ -516,20 +544,19 @@ via presigned URLs. It covers:
 - **Auth** — register / login / logout (JWT held in memory).
 - **Your files** — list, upload (block-level dedup), download (on-read hash
   verify), delete.
-- **Shared with you** — a second tab listing incoming grants (`/shares/incoming`),
-  with hash-verified download of another user's file straight from their
-  `<owner>/<hash>` namespace.
-- **Sharing** — grant read-only access to another user, and mint / copy / revoke
-  public share-links, each with an expandable per-file panel.
+- **Shared with you** — a second tab: incoming grants (`/shares/incoming`), with
+  hash-verified download from the owner's `<owner>/<hash>` namespace.
+- **Sharing** — an expandable per-file panel: grant read-only access to another
+  user, see **who the file is currently shared with** (`/shares/outgoing`) and
+  revoke any of them, plus mint / copy / revoke public share-links.
 - **Public links** — a no-auth `/?token=…` page that resolves a share-link and
   downloads the file (hash-verified) with no account.
-- **Real-time** — a WebSocket (`/ws`) refreshes *your* file list live when the
-  same account commits from another device. The "Shared with you" tab does not
-  live-update: `commit` notifies only the file's owner, never the recipients of
-  a grant (it refetches on tab switch).
+- **Real-time** — a WebSocket (`/ws`) refreshes *your* file list when the same
+  account commits elsewhere. "Shared with you" does **not** live-update — `commit`
+  notifies only the owner — so it refetches on tab switch.
 
 > The download path — fetch each block, re-verify `sha256(block) == hash`,
-> reassemble — lives once in `frontend/src/download.ts` (`assembleBlocks`), shared
+> reassemble — lives once in `frontend/src/lib/download.ts` (`assembleBlocks`), shared
 > by all three of the owned-file, shared-file, and public-link flows.
 
 ```bash
@@ -721,8 +748,8 @@ volume grows.
   with **expiry and revocation** (an `exp` claim plus a `jti` allowlist in
   Mongo), all gated by an authorization layer that never touches storage.
 - **Web UI** — React + Vite: auth, tabbed "Your files" / "Shared with you", upload,
-  hash-verified download, delete, sharing (grant to a user, mint/copy/revoke public
-  links), and a no-auth public download page.
+  hash-verified download, delete, sharing (grant to a user, list and revoke a file's
+  recipients, mint/copy/revoke public links), and a no-auth public download page.
 - **File deletion** — `DELETE /files`, owner-scoped from the token; removes the
   recipe only and leaves blocks for GC.
 - **Refresh tokens** — short-lived access + long-lived refresh with a Mongo
@@ -751,6 +778,8 @@ volume grows.
   path, and a scheduled mark-and-sweep GC finally has a use case.
 
 **Hardening backlog:**
+- Shorten the presigned-URL TTL (`ExpiresIn=3600` in `B2BlockStore`) so revoking a
+  grant or link closes the read window in minutes rather than an hour.
 - File versioning (conflict copies).
 - Refresh-token rotation (currently non-rotating).
 - httpOnly-cookie token storage (currently `localStorage`).

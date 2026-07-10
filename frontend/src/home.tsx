@@ -2,7 +2,7 @@ import LogoutIcon from "@mui/icons-material/Logout";
 import { Button, Container, Stack, Tab, Tabs, Typography } from "@mui/material";
 import { useState } from "react";
 import { FileList } from "./files";
-import { SharedWithMe } from "./shared";
+import { SharedWithMe } from "./incoming";
 
 export function Home({ onLogout }: { onLogout: () => void }) {
   const [tab, setTab] = useState(0);

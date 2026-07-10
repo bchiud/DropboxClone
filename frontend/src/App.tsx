@@ -1,6 +1,6 @@
 import { CircularProgress, Container } from "@mui/material";
 import { useEffect, useState } from "react";
-import { logout as apiLogout, hasToken, restoreSession } from "./api";
+import { logout as apiLogout, hasToken, restoreSession } from "./lib/api";
 import { Login } from "./auth";
 import { Home } from "./home";
 import { PublicDownload } from "./public";

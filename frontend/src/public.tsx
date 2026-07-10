@@ -8,9 +8,9 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
-import { linkDownloadUrls, linkRecipe, type Recipe } from "./api";
-import { assembleBlocks, saveBlob } from "./download";
-import { displayPath, downloadName, formatSize } from "./format";
+import { linkDownloadUrls, linkRecipe, type Recipe } from "./lib/api";
+import { assembleBlocks, saveBlob } from "./lib/download";
+import { displayPath, downloadName, formatSize } from "./lib/format";
 
 export function PublicDownload({ token }: { token: string }) {
   // --- state ---

@@ -14,6 +14,13 @@ export function middleTruncate(name: string, max = 44): string {
   return `${name.slice(0, keep - tail)}…${name.slice(-tail)}`;
 }
 
+// username always returns same hue
+export function userColor(username: string): string {
+  let hash = 0;
+  for (const ch of username) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${hash} 42% 45%)`;
+}
+
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     day: "numeric",
@@ -22,7 +29,7 @@ export function formatDate(iso: string): string {
   });
 }
 
-// Human-readable byte sizes: 500 -> "500 B", 1536 -> "1.5 KB", 5_000_000 -> "4.8 MB".
+// human-readable: 500 -> "500 B", 1536 -> "1.5 KB", 5,000,000 -> "4.8 MB".
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
 
 export function formatSize(bytes: number): string {

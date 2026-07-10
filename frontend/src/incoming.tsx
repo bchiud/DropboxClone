@@ -22,25 +22,18 @@ import {
   downloadUrls,
   listIncomingShares,
   recipe,
-  type IncomingShare,
-} from "./api";
-import { assembleBlocks, saveBlob } from "./download";
+  type Share,
+} from "./lib/api";
+import { assembleBlocks, saveBlob } from "./lib/download";
 import {
   displayPath,
   downloadName,
   formatDate,
   middleTruncate,
-} from "./format";
+  userColor,
+} from "./lib/format";
 
-const shareKey = (s: IncomingShare) => `${s.owner}:${s.path}`;
-
-// The same username always lands on the same hue, so an owner stays
-// recognisable across rows without reading the name.
-function ownerColor(owner: string): string {
-  let hash = 0;
-  for (const ch of owner) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
-  return `hsl(${hash} 42% 45%)`;
-}
+const shareKey = (s: Share) => `${s.owner}:${s.path}`;
 
 const headCell = {
   textTransform: "uppercase",
@@ -51,7 +44,7 @@ const headCell = {
 };
 
 export function SharedWithMe() {
-  const [incomingShares, setIncomingShares] = useState<IncomingShare[]>([]);
+  const [incomingShares, setIncomingShares] = useState<Share[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -69,7 +62,7 @@ export function SharedWithMe() {
     load();
   }, []);
 
-  async function download(share: IncomingShare) {
+  async function download(share: Share) {
     const { path, owner } = share;
     setBusyKey(shareKey(share));
     setError(null);
@@ -182,7 +175,7 @@ export function SharedWithMe() {
                           height: 26,
                           fontSize: 12,
                           fontWeight: 600,
-                          bgcolor: ownerColor(s.owner),
+                          bgcolor: userColor(s.owner),
                         }}
                       >
                         {s.owner.charAt(0).toUpperCase()}

@@ -23,15 +23,15 @@ import {
   recipe,
   uploadUrls,
   type FileSummary,
-} from "./api";
-import { chunkFile } from "./crypto";
-import { assembleBlocks, saveBlob } from "./download";
+} from "./lib/api";
+import { chunkFile } from "./lib/crypto";
+import { assembleBlocks, saveBlob } from "./lib/download";
 import {
   displayPath,
   downloadName,
   formatSize,
   middleTruncate,
-} from "./format";
+} from "./lib/format";
 import { SharePanel } from "./shares";
 
 export function FileList() {
