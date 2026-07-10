@@ -2,7 +2,7 @@ import { CircularProgress, Container } from "@mui/material";
 import { useEffect, useState } from "react";
 import { logout as apiLogout, hasToken, restoreSession } from "./api";
 import { Login } from "./auth";
-import { FileList } from "./files";
+import { Home } from "./home";
 import { PublicDownload } from "./public";
 
 export function App() {
@@ -36,7 +36,7 @@ export function App() {
   }
 
   return loggedIn ? (
-    <FileList onLogout={logout} />
+    <Home onLogout={logout} />
   ) : (
     <Login onLoggedIn={() => setLoggedIn(true)} />
   );

@@ -1,16 +1,15 @@
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DownloadIcon from "@mui/icons-material/Download";
-import LogoutIcon from "@mui/icons-material/Logout";
 import ShareIcon from "@mui/icons-material/Share";
 import {
   Alert,
   Box,
   Button,
-  Container,
   LinearProgress,
   Paper,
   Stack,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useEffect, useState } from "react";
@@ -25,11 +24,17 @@ import {
   uploadUrls,
   type FileSummary,
 } from "./api";
-import { chunkFile, sha256Hex } from "./crypto";
-import { displayPath, downloadName, formatSize } from "./format";
+import { chunkFile } from "./crypto";
+import { assembleBlocks, saveBlob } from "./download";
+import {
+  displayPath,
+  downloadName,
+  formatSize,
+  middleTruncate,
+} from "./format";
 import { SharePanel } from "./shares";
 
-export function FileList({ onLogout }: { onLogout: () => void }) {
+export function FileList() {
   // --- state ---
   const [files, setFiles] = useState<FileSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -88,26 +93,8 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
     try {
       const rec = await recipe(f.path, f.owner);
       const urls = await downloadUrls(rec.block_hashes, f.owner, f.path);
-
-      const parts: ArrayBuffer[] = [];
-      for (const hash of rec.block_hashes) {
-        // IN ORDER — recipe order = file order
-        const res = await fetch(urls[hash], { cache: "no-store" }); // plain fetch to B2 again
-        if (!res.ok) throw new Error(`block GET ${hash} → ${res.status}`);
-        const bytes = await res.arrayBuffer();
-        if ((await sha256Hex(bytes)) !== hash)
-          // re-verify on read
-          throw new Error(`block ${hash} failed verification`);
-        parts.push(bytes);
-      }
-
-      const blob = new Blob(parts, { type: "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = downloadName(f.path);
-      a.click();
-      URL.revokeObjectURL(url);
+      const blob = await assembleBlocks(rec.block_hashes, urls);
+      saveBlob(blob, downloadName(f.path));
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : "Download failed");
@@ -137,16 +124,7 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
   }
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4 }}>
-      <Stack direction="row" sx={{ alignItems: "center", mb: 2 }}>
-        <Typography variant="h5" sx={{ flexGrow: 1 }}>
-          Your files
-        </Typography>
-        <Button startIcon={<LogoutIcon />} onClick={onLogout}>
-          Log out
-        </Button>
-      </Stack>
-
+    <>
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
@@ -176,41 +154,49 @@ export function FileList({ onLogout }: { onLogout: () => void }) {
         {files.map((f) => (
           <Paper key={f.path} variant="outlined" sx={{ p: 1 }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-              <Box sx={{ flexGrow: 1 }}>
-                <Typography>{displayPath(f.path)}</Typography>
+              {/* minWidth:0 lets this flex item shrink below its content,
+                  which is what allows the name to ellipsize */}
+              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                <Tooltip title={displayPath(f.path)} enterDelay={400}>
+                  <Typography noWrap>
+                    {middleTruncate(displayPath(f.path))}
+                  </Typography>
+                </Tooltip>
                 <Typography variant="body2" color="text.secondary">
                   {formatSize(f.size)}
                 </Typography>
               </Box>
-              <Button
-                size="small"
-                startIcon={<DownloadIcon />}
-                onClick={() => download(f)}
-                disabled={busy}
-              >
-                Download
-              </Button>
-              <Button
-                size="small"
-                startIcon={<ShareIcon />}
-                onClick={() => toggleShare(f.path)}
-              >
-                Share
-              </Button>
-              <Button
-                size="small"
-                startIcon={<DeleteIcon />}
-                onClick={() => remove(f)}
-                disabled={busy}
-                sx={{ color: "error.light" }}
-              >
-                Delete
-              </Button>
+              <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+                <Button
+                  size="small"
+                  startIcon={<DownloadIcon />}
+                  onClick={() => download(f)}
+                  disabled={busy}
+                >
+                  Download
+                </Button>
+                <Button
+                  size="small"
+                  startIcon={<ShareIcon />}
+                  onClick={() => toggleShare(f.path)}
+                >
+                  Share
+                </Button>
+                <Button
+                  size="small"
+                  startIcon={<DeleteIcon />}
+                  onClick={() => remove(f)}
+                  disabled={busy}
+                  sx={{ color: "error.light" }}
+                >
+                  Delete
+                </Button>
+              </Stack>
             </Stack>
             {openPath === f.path && <SharePanel path={f.path} />}
           </Paper>
         ))}
       </Stack>
-    </Container>
+    </>
   );
 }

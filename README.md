@@ -35,11 +35,15 @@ This buys three things:
 - **Integrity** — a block's key is a checksum of its contents; readers re-verify it.
 
 **Per-user block scoping.** Block keys are namespaced by owner (`<owner>/<hash>`),
-derived from the authenticated token — never from client input. This trades
-cross-user dedup for security: no cross-user side channel (your upload speed
-can't reveal whether *another* user has a block) and no cross-user poisoning (you
-can only write under your own namespace). It's what makes client-driven direct
-uploads safe.
+derived from the authenticated token — never from client input. It's what makes
+client-driven direct uploads safe, trading cross-user dedup for two guarantees:
+
+- **No cross-user side channel** — `/blocks/missing` can only answer "do *you*
+  have this block?", so your upload speed can't reveal whether *another* user
+  already holds one.
+- **No cross-user poisoning** — the server mints a presigned PUT and never sees
+  the bytes, so it can't check `sha256(data) == hash` on write. Namespacing the
+  key means a bad block can only ever land in your own namespace.
 
 > Chunking is **fixed-size** (like Dropbox). The `chunker.split()` seam is isolated
 > so it can be swapped for content-defined chunking (rolling hash) without
@@ -76,10 +80,15 @@ Hexagonal (ports & adapters) with dependency injection. Dependencies point
    cross-cutting:    auth_dependencies.py (bearer → user) · realtime.py (Notifier + ConnectionManager)
 ```
 
-**Why this shape:** the domain and application layers never import FastAPI, boto3,
-or pymongo. You could swap B2 for local disk, or Mongo for Postgres, by writing one
-new adapter and changing one line in `dependencies.py` — nothing else moves. The
-services are unit-tested with in-memory fakes, no cloud required.
+**Why this shape:**
+
+- **No framework leakage** — the domain and application layers never import
+  FastAPI, boto3, or pymongo.
+- **Swappable infrastructure** — trade B2 for local disk, or Mongo for Postgres,
+  by writing one new adapter and changing one line in `dependencies.py`. Nothing
+  else moves.
+- **Testable core** — services are unit-tested with in-memory fakes, no cloud
+  required.
 
 **Realtime path (pub/sub).** A commit/delete publishes onto a `ChangeBus`; every
 server runs a subscribe-loop that fans out to *its own* WebSockets — so a change on
@@ -197,12 +206,43 @@ Share(owner, path, shared_with, created_at)   # one user-to-user grant (Mongo `s
 ShareLink(jti, owner, path, created_at, expires_at)  # one live public link (Mongo `share_links`)
 ```
 
-`FileSummary` vs `FileRecord` is a deliberate read/write split: listings project
-away the (potentially huge) `block_hashes` array. A `Share` is keyed on the
-`(owner, path, shared_with)` triple — one document per grant. A `ShareLink` row
-is keyed on `jti` (the token's unique id): its existence is what makes a link
-*live*, so revoking is just deleting the row, and `expires_at` mirrors the
-token's `exp` claim (both set once, at mint).
+- **`FileSummary` vs `FileRecord`** — a deliberate read/write split: listings
+  project away the (potentially huge) `block_hashes` array.
+- **`Share`** — keyed on the `(owner, path, shared_with)` triple, one document
+  per grant.
+- **`ShareLink`** — keyed on `jti` (the token's unique id). Its *existence* is
+  what makes a link live, so revoking is just deleting the row; `expires_at`
+  mirrors the token's `exp` claim (both set once, at mint).
+
+### Why NoSQL (MongoDB) over SQL
+
+The access pattern drove this, not the data volume:
+
+- **No joins to give up.** Every query in `app/adapters/` is a single-collection
+  point lookup — `files` by `(owner, path)`, `share_links` by `jti`, `users` by
+  `username`. Not one join, aggregation, or transaction in the codebase.
+- **Recipes embed naturally.** `block_hashes` is an ordered array (~12,000 entries
+  for a 50 GB file) stored inline in `FileRecord`, so a recipe read is one lookup.
+  SQL wants a child `file_blocks` table, joined and re-sorted on every read.
+- **Pydantic is already the schema.** `.model_dump()` / `Model(**doc)` at the adapter
+  boundary *is* the whole ORM — no migrations, no second schema to keep in sync.
+- **TTL indexes reap expiring rows for free** (`expires_at, expireAfterSeconds=0` on
+  `refresh_tokens`) — no cron job. Postgres needs `pg_cron` or a sweeper.
+- **Shard on `owner`** to scale out — a user's files and grants colocate (see
+  [Scaling](#scaling)).
+
+**The cost — referential integrity.** Nothing here *requires* NoSQL; Postgres would
+serve this data fine.
+
+- **What we gave up.** `delete_file` removes only the recipe, so `shares` and
+  `share_links` rows pointing at that path survive as dangling references — an
+  invariant the application layer must remember, not one the store enforces.
+- **But `ON DELETE CASCADE` is only half a fix.** A foreign key on the *natural* key
+  `(owner, path)` clears the rows, then happily resurrects them: delete
+  `/report.pdf`, commit a new one at the same path, and the old grants reattach.
+- **Identity is the bug; the database is a side issue.** The durable fix is an
+  immutable surrogate `file_id` minted at first commit — which SQL gives you by
+  convention, not by nature. See [Sharing tradeoffs](#sharing--permissions).
 
 ---
 
@@ -332,10 +372,19 @@ as *less code* (there is no `can_write`).
 The `exp` claim and the row's `expires_at` are a **single source of truth** —
 both computed once in `create_link`, so the JWT and the DB can never disagree.
 
-**Tradeoffs (v1):** expired rows are left in `share_links` (they already fail the
-`exp` check, so they're inert — a TTL index or a sweep can reap them later).
-Granting a path that doesn't exist just creates a harmless dangling grant that
-resolves to `404` on access.
+**Tradeoffs (v1):**
+
+- **Expired rows linger** in `share_links` — they already fail the `exp` check,
+  so they're inert; a TTL index or a sweep can reap them later.
+- **Granting a nonexistent path** is silently accepted, creating a dangling grant
+  that resolves to `404` on access.
+- **Deleting a file leaves its grants behind.** `delete_file` removes only the
+  recipe, so the `shares` and `share_links` rows keyed on that `(owner, path)`
+  survive. Reads still `404` (the recipe is gone) — but **re-creating a file at the
+  same path silently reattaches every stale grant and un-expired link**, an
+  authorization bug that needs a delete-then-recreate to fire. Near-term fix: purge
+  a file's grants on delete. Durable fix: key grants on an immutable `file_id`, so a
+  re-created file can never match them.
 
 ---
 
@@ -347,8 +396,8 @@ from `app/`, so a clean API is its entire contract. It does **delta sync**: it
 chunks files itself and transfers only changed blocks, straight to/from B2.
 
 ```
-file change  ──▶ watcher ──▶ SyncEngine.push()   chunk → /blocks/missing → PUT missing → /files/commit
-every N secs ──────────────▶ SyncEngine.pull()   /files/recipe → GET blocks (verify) → reassemble
+file change      ──▶ watcher     ──▶ SyncEngine.push()   chunk → /blocks/missing → PUT missing → /files/commit
+server "changed" ──▶ ws_listener ──▶ SyncEngine.pull()   /files/recipe → GET blocks (verify) → reassemble
 ```
 
 - **`chunker`** splits files into hash-addressed blocks (its own copy of the 4 MiB
@@ -359,11 +408,17 @@ every N secs ──────────────▶ SyncEngine.pull()   /
 - **`pull`** downloads a differing file's blocks from B2, **re-verifies** each
   (`sha256(block) == hash`) before reassembling — so a corrupt/poisoned block can
   never silently corrupt a file.
-- **`watcher`** (watchdog) fires `push()` on any file event; a timer drives `pull()`.
+- **`watcher`** (watchdog) fires `push()` on any file event.
+- **`ws_listener`** holds a WebSocket to `/ws` and fires `pull()` on every server
+  `"changed"` push — plus once on (re)connect, to reconcile anything missed while
+  it was disconnected. It reconnects on its own every 3s if the socket drops.
 
-**v1 limitations (documented in `sync.py`):** pull re-downloads a differing file's
-blocks in full (no local block reuse), periodic pull (not real-time), last-writer-wins
-(no conflict copies).
+**v1 limitations** (documented in `sync.py`):
+
+- **No pull-side delta** — pull re-downloads a differing file's blocks in full,
+  with no local block reuse. (It *does* skip files whose local blocks already
+  match the recipe.)
+- **Last-writer-wins** — no conflict copies.
 
 ---
 
@@ -433,9 +488,10 @@ python -m client \
 ```
 
 The client logs in, does an initial two-way sync, then **watches the folder** and
-pushes changes as they happen, pulling remote updates every `--poll` seconds
-(default 10). Drop a file into `~/DropboxClone` and it uploads; run a second client
-against a different folder (or machine) with the same account and it appears there.
+pushes changes as they happen — while a WebSocket to `/ws` pulls remote updates
+the moment another device commits. Drop a file into `~/DropboxClone` and it uploads;
+run a second client against a different folder (or machine) with the same account
+and it appears there, without polling.
 
 ```bash
 # one-shot sync instead of continuous watching:
@@ -449,7 +505,6 @@ python -m client --server http://127.0.0.1:8000 \
 | `--username` / `--password` | *(required)* | account to log in as (must already exist) |
 | `--folder` | *(required)* | local folder to sync |
 | `--once` | off | sync once and exit (no watching) |
-| `--poll` | `10` | seconds between remote-change pulls |
 
 ### 4. Launch the web UI (optional)
 
@@ -459,13 +514,23 @@ verification all run in the browser, and block bytes go **browser → B2 directl
 via presigned URLs. It covers:
 
 - **Auth** — register / login / logout (JWT held in memory).
-- **Files** — list, upload (block-level dedup), download (on-read hash verify).
+- **Your files** — list, upload (block-level dedup), download (on-read hash
+  verify), delete.
+- **Shared with you** — a second tab listing incoming grants (`/shares/incoming`),
+  with hash-verified download of another user's file straight from their
+  `<owner>/<hash>` namespace.
 - **Sharing** — grant read-only access to another user, and mint / copy / revoke
   public share-links, each with an expandable per-file panel.
 - **Public links** — a no-auth `/?token=…` page that resolves a share-link and
   downloads the file (hash-verified) with no account.
-- **Real-time** — a WebSocket (`/ws`) refreshes the file list live when the same
-  account commits from another device, instead of on manual reload.
+- **Real-time** — a WebSocket (`/ws`) refreshes *your* file list live when the
+  same account commits from another device. The "Shared with you" tab does not
+  live-update: `commit` notifies only the file's owner, never the recipients of
+  a grant (it refetches on tab switch).
+
+> The download path — fetch each block, re-verify `sha256(block) == hash`,
+> reassemble — lives once in `frontend/src/download.ts` (`assembleBlocks`), shared
+> by all three of the owned-file, shared-file, and public-link flows.
 
 ```bash
 cd frontend
@@ -582,9 +647,13 @@ The work is almost all in the *control plane*.
 
 ### Large files
 
-Two things are already right: block bytes go **browser/client → B2 directly**
-(the API only moves tiny JSON), and identical blocks transfer once (dedup). What
-starts to hurt:
+Two things are already right:
+
+- **Bytes bypass the app server** — block data goes browser/client → B2 directly;
+  the API only moves tiny JSON.
+- **Identical blocks transfer once** — dedup, within a user's namespace.
+
+What starts to hurt:
 
 - **Unbounded fan-out.** A 50 GB file is ~12,000 blocks — today that's one giant
   `upload-urls` response and (in the web client) 12,000 concurrent `PUT`s. Bound
@@ -651,9 +720,9 @@ volume grows.
 - **Sharing & permissions** — read-only user-to-user grants + public share-links
   with **expiry and revocation** (an `exp` claim plus a `jti` allowlist in
   Mongo), all gated by an authorization layer that never touches storage.
-- **Web UI** — React + Vite: auth, file list, upload, hash-verified download,
-  delete, sharing (grant to a user, mint/copy/revoke public links), and a
-  no-auth public download page.
+- **Web UI** — React + Vite: auth, tabbed "Your files" / "Shared with you", upload,
+  hash-verified download, delete, sharing (grant to a user, mint/copy/revoke public
+  links), and a no-auth public download page.
 - **File deletion** — `DELETE /files`, owner-scoped from the token; removes the
   recipe only and leaves blocks for GC.
 - **Refresh tokens** — short-lived access + long-lived refresh with a Mongo
@@ -669,6 +738,11 @@ volume grows.
 - **100% test coverage.**
 
 **Next:**
+- Purge a file's grants on delete — today `delete_file` leaves `shares` and
+  `share_links` rows behind (see [Sharing tradeoffs](#sharing--permissions)); the
+  "Shared with you" tab now renders them as rows that `404` on download.
+- Notify a grant's recipients on commit, so "Shared with you" live-updates like
+  "Your files" does. `commit` currently notifies only the owner.
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file).
 - Content-defined chunking (so delta survives insertions).
 - Streaming chunking for very large files (avoid reading whole file into memory).

@@ -209,6 +209,13 @@ export async function downloadUrls(
 
 // --- sharing ---
 
+export interface IncomingShare {
+  owner: string;
+  path: string;
+  shared_with: string;
+  created_at: string;
+}
+
 export interface ShareLink {
   jti: string;
   owner: string;
@@ -227,6 +234,13 @@ export async function shareWithUser(
     body: JSON.stringify({ path, shared_with: sharedWith }),
   });
 }
+
+export async function listIncomingShares(): Promise<IncomingShare[]> {
+  const res = await request("/shares/incoming");
+  return (await res.json()) as IncomingShare[];
+}
+
+// --- share links ---
 
 export async function createShareLink(path: string): Promise<string> {
   const res = await request("/shares/link", {

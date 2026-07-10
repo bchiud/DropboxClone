@@ -9,7 +9,7 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { linkDownloadUrls, linkRecipe, type Recipe } from "./api";
-import { sha256Hex } from "./crypto";
+import { assembleBlocks, saveBlob } from "./download";
 import { displayPath, downloadName, formatSize } from "./format";
 
 export function PublicDownload({ token }: { token: string }) {
@@ -37,22 +37,8 @@ export function PublicDownload({ token }: { token: string }) {
     setError(null);
     try {
       const urls = await linkDownloadUrls(token, rec.block_hashes);
-      const parts: ArrayBuffer[] = [];
-      for (const hash of rec.block_hashes) {
-        const res = await fetch(urls[hash], { cache: "no-store" });
-        if (!res.ok) throw new Error(`block GET ${hash} → ${res.status}`);
-        const bytes = await res.arrayBuffer();
-        if ((await sha256Hex(bytes)) !== hash)
-          throw new Error(`block ${hash} failed verification`);
-        parts.push(bytes);
-      }
-      const blob = new Blob(parts, { type: "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = downloadName(rec.path);
-      a.click();
-      URL.revokeObjectURL(url);
+      const blob = await assembleBlocks(rec.block_hashes, urls);
+      saveBlob(blob, downloadName(rec.path));
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : "Download failed");
