@@ -4,12 +4,13 @@ The ShareService dependency is overridden with a fake; the authenticated user
 is pinned to "bob" to verify the grant owner always comes from the token.
 """
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.auth_dependencies import get_current_user
-from app.dependencies import get_share_service
+from app.dependencies import get_notifier, get_share_service
 from app.main import app
 from app.models.share import Share, ShareLink
 
@@ -116,3 +117,39 @@ def test_list_links_returns_the_callers_links(service):
 def test_shares_require_auth():
     resp = TestClient(app).get("/shares/incoming")
     assert resp.status_code == 401
+
+
+# --- realtime: only the recipient's view changes ---
+
+@pytest.fixture
+def notifier():
+    n = AsyncMock()
+    app.dependency_overrides[get_notifier] = lambda: n
+    yield n
+
+
+def test_granting_notifies_the_recipient_and_not_the_owner(service, notifier):
+    resp = TestClient(app).post(
+        "/shares", json={"path": "/x.txt", "shared_with": "alice"})
+    assert resp.status_code == 200
+    # alice's "Shared with you" list gained a row; bob's file list did not change
+    notifier.notify.assert_awaited_once_with("alice")
+
+
+def test_revoking_notifies_the_recipient_and_not_the_owner(service, notifier):
+    resp = TestClient(app).request(
+        "DELETE", "/shares", json={"path": "/x.txt", "shared_with": "alice"})
+    assert resp.status_code == 204
+    notifier.notify.assert_awaited_once_with("alice")
+
+
+def test_minting_a_public_link_notifies_nobody(service, notifier):
+    resp = TestClient(app).post("/shares/link", json={"path": "/x.txt"})
+    assert resp.status_code == 200
+    notifier.notify.assert_not_awaited()  # a link has no user to notify
+
+
+def test_revoking_a_public_link_notifies_nobody(service, notifier):
+    resp = TestClient(app).delete("/shares/link/j1")
+    assert resp.status_code == 204
+    notifier.notify.assert_not_awaited()

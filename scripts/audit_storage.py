@@ -1,30 +1,43 @@
 """One-shot storage audit for the Dropbox clone.
 
 Cross-checks the Mongo ``files`` recipes against the B2 block objects in both
-directions:
+directions, and the sharing collections against ``files``:
 
-* **phantom files**   – a file recipe references a block that is missing from B2
+* **phantom files**    – a file recipe references a block that is missing from B2
   (the file can no longer be fully downloaded).
-* **orphaned blocks** – a B2 object under ``<owner>/<hash>`` that no surviving
+* **orphaned blocks**  – a B2 object under ``<owner>/<hash>`` that no surviving
   file recipe references (pure wasted storage).
+* **orphaned grants**  – a ``shares`` or ``share_links`` row whose ``(owner, path)``
+  has no ``files`` document.
 
 The block key layout is ``<owner>/<hash>`` (see ``FileService._block_key``), and
 the only thing that references blocks is the ``files`` collection, so reading all
 of it yields a complete reference set — nothing else can legitimately point at a
 block.
 
+``DELETE /files`` purges a file's grants before removing its recipe, so orphaned
+grants should not normally exist. They appear when that non-atomic pair is
+interrupted between the two writes, or when a grant was made on a path that was
+never uploaded. Both are inert — every read gates on the recipe, which ``404``s —
+so this sweep is housekeeping, not a security fix. It is what converges the crash
+window that ``purge_for_file`` leaves open.
+
 Dry-run by default: it only reports. Pass ``--delete`` to remove phantom file
-docs and/or orphaned block objects (you are asked to confirm unless ``--yes``).
+docs, orphaned block objects and/or orphaned grants (you are asked to confirm
+unless ``--yes``).
 
 Usage (from the repo root, venv active)::
 
-    python -m scripts.audit_storage                  # report both directions
+    python -m scripts.audit_storage                  # report all three checks
     python -m scripts.audit_storage --phantom-files  # only files -> blocks
     python -m scripts.audit_storage --orphan-blocks  # only blocks -> files
+    python -m scripts.audit_storage --orphan-grants  # only shares -> files
     python -m scripts.audit_storage --delete         # act (with confirmation)
 
-Caveat: don't run ``--delete --orphan-blocks`` during an active upload — blocks
+Caveats: don't run ``--delete --orphan-blocks`` during an active upload — blocks
 that were just PUT but not yet committed would look orphaned and get swept.
+Likewise ``--delete --orphan-grants`` will reap a grant that was deliberately made
+ahead of the file it points at.
 """
 
 from __future__ import annotations
@@ -71,6 +84,16 @@ def _referenced_keys(files: list[dict]) -> set[str]:
     return refs
 
 
+def _live_files(files: list[dict]) -> set[tuple[str, str]]:
+    """The (owner, path) pairs a grant may legitimately point at."""
+    return {(doc["owner"], doc["path"]) for doc in files}
+
+
+def _orphan_rows(rows: list[dict], live: set[tuple[str, str]]) -> list[dict]:
+    """Grant/link rows whose file no longer exists."""
+    return [r for r in rows if (r["owner"], r["path"]) not in live]
+
+
 def _human(num_bytes: int) -> str:
     size = float(num_bytes)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -82,11 +105,12 @@ def _human(num_bytes: int) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Audit B2 blocks against Mongo file recipes (both directions)."
+        description="Audit B2 blocks and sharing rows against Mongo file recipes."
     )
     parser.add_argument(
         "--delete", action="store_true",
-        help="actually delete phantom docs / orphaned blocks (default: report only)",
+        help="actually delete phantom docs / orphaned blocks / orphaned grants "
+             "(default: report only)",
     )
     parser.add_argument(
         "--yes", action="store_true",
@@ -100,11 +124,17 @@ def main() -> None:
         "--orphan-blocks", action="store_true",
         help="only the blocks -> files direction",
     )
+    parser.add_argument(
+        "--orphan-grants", action="store_true",
+        help="only the shares/share_links -> files direction",
+    )
     args = parser.parse_args()
 
-    # neither flag => both directions; one flag => only that direction
-    do_phantom = args.phantom_files or not args.orphan_blocks
-    do_orphan = args.orphan_blocks or not args.phantom_files
+    # no flag => every check; any flag => only the checks named
+    picked = args.phantom_files or args.orphan_blocks or args.orphan_grants
+    do_phantom = args.phantom_files or not picked
+    do_orphan = args.orphan_blocks or not picked
+    do_grants = args.orphan_grants or not picked
 
     s3, db = _make_clients()
     files = list(
@@ -151,18 +181,42 @@ def main() -> None:
             print(f"  {k}  ({_human(objects[k])})")
         print()
 
+    orphan_shares: list[dict] = []
+    orphan_links: list[dict] = []
+    if do_grants:
+        live = _live_files(files)
+        orphan_shares = _orphan_rows(
+            list(db["shares"].find({}, {"owner": 1, "path": 1, "shared_with": 1, "_id": 0})),
+            live,
+        )
+        orphan_links = _orphan_rows(
+            list(db["share_links"].find({}, {"owner": 1, "path": 1, "jti": 1, "_id": 0})),
+            live,
+        )
+        print(
+            f"== orphaned grants (row points at a file that doesn't exist): "
+            f"{len(orphan_shares)} shares, {len(orphan_links)} links =="
+        )
+        for r in orphan_shares:
+            print(f"  share  {r['owner']} {r['path']} -> {r['shared_with']}")
+        for r in orphan_links:
+            print(f"  link   {r['owner']} {r['path']} jti={r['jti'][:8]}…")
+        print()
+
     if not args.delete:
         print("dry run — nothing deleted. Re-run with --delete to act.")
         return
 
-    if not (phantom_files or orphan_keys):
+    if not (phantom_files or orphan_keys or orphan_shares or orphan_links):
         print("nothing to delete.")
         return
 
     if not args.yes:
         answer = input(
-            f"Delete {len(phantom_files)} file docs and "
-            f"{len(orphan_keys)} block objects? type 'yes' to confirm: "
+            f"Delete {len(phantom_files)} file docs, "
+            f"{len(orphan_keys)} block objects and "
+            f"{len(orphan_shares) + len(orphan_links)} grant rows? "
+            f"type 'yes' to confirm: "
         )
         if answer.strip().lower() != "yes":
             print("aborted.")
@@ -177,6 +231,18 @@ def main() -> None:
         s3.delete_object(Bucket=settings.s3_bucket, Key=key)
     if orphan_keys:
         print(f"deleted {len(orphan_keys)} orphaned block objects.")
+
+    for r in orphan_shares:
+        db["shares"].delete_one(
+            {"owner": r["owner"], "path": r["path"], "shared_with": r["shared_with"]}
+        )
+    for r in orphan_links:
+        db["share_links"].delete_one({"jti": r["jti"]})  # jti is unique
+    if orphan_shares or orphan_links:
+        print(
+            f"deleted {len(orphan_shares)} orphaned shares and "
+            f"{len(orphan_links)} orphaned links."
+        )
 
 
 if __name__ == "__main__":

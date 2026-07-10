@@ -19,6 +19,7 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import {
+  connectChanges,
   downloadUrls,
   listIncomingShares,
   recipe,
@@ -60,6 +61,8 @@ export function SharedWithMe() {
       }
     }
     load();
+    const ws = connectChanges(() => load());
+    return () => ws.close();
   }, []);
 
   async function download(share: Share) {

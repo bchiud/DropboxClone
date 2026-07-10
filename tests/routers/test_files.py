@@ -43,15 +43,17 @@ class FakeService:
 
 
 class FakeShareService:
-    def __init__(self, allow=True, log=None):
+    def __init__(self, allow=True, log=None, recipients=()):
         self.allow = allow
         self.log = log if log is not None else []
+        self.recipients = list(recipients)  # who purge_for_file reports it dropped
 
     def can_read(self, requester, owner, path):
         return self.allow
 
     def purge_for_file(self, owner, path):
         self.log.append(("purge", owner, path))
+        return self.recipients
 
 
 @pytest.fixture
@@ -238,5 +240,38 @@ def test_delete_of_a_missing_file_still_purges_its_dangling_grants():
     try:
         assert client.delete("/files", params={"path": "/nope.txt"}).status_code == 404
         assert events == [("purge", "test-user", "/nope.txt")]  # no delete recorded
+    finally:
+        app.dependency_overrides.clear()
+
+
+# --- delete notifies whoever's view changed ---
+
+def _delete_client(recipients):
+    notifier = AsyncMock()
+    app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService(recipients=recipients)
+    app.dependency_overrides[get_notifier] = lambda: notifier
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    return TestClient(app), notifier
+
+
+def test_delete_notifies_the_owner_and_every_purged_recipient():
+    client, notifier = _delete_client(["alice", "carol"])
+    try:
+        assert client.delete("/files", params={"path": "/known.txt"}).status_code == 204
+        awaited = [c.args[0] for c in notifier.notify.await_args_list]
+        assert sorted(awaited) == ["alice", "carol", "test-user"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_of_a_missing_file_notifies_purged_recipients_but_not_the_owner():
+    """Purge runs before the 404, so those grants really were dropped and the
+    recipients' lists really did change. The owner's file list did not."""
+    client, notifier = _delete_client(["alice"])
+    try:
+        assert client.delete("/files", params={"path": "/nope.txt"}).status_code == 404
+        awaited = [c.args[0] for c in notifier.notify.await_args_list]
+        assert awaited == ["alice"]
     finally:
         app.dependency_overrides.clear()
