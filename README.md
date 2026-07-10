@@ -119,14 +119,14 @@ The traffic is one-way and single-event: the server pushes `{"type":"changed"}`,
 the client refetches. Nothing ever flows client→server on that socket. That is
 **exactly** Server-Sent Events' shape, so the two were weighed:
 
-| | WebSocket (chosen) | SSE (`EventSource`) |
-|---|---|---|
-| **Fits one-way traffic** | over-spec'd — bidirectional + binary framing unused | purpose-built |
-| **Reconnect on drop** | hand-rolled (backoff, jitter, disposal guard) | free, built into the browser |
-| **Missed-event replay** | none — reconnect refetches instead | `Last-Event-ID`, if the server retains events |
-| **Auth** | no custom headers → token in query string | *same* — `EventSource` can't set headers either |
-| **Server (FastAPI)** | first-class: `@app.websocket`, `WebSocketDisconnect` | `StreamingResponse` + manual `text/event-stream` framing + `is_disconnected()` polling |
-| **Connections per origin** | not subject to the HTTP/1.1 limit | consumes one of ~6 (moot here: ≤2 streams, and block transfers hit B2's origin) |
+| | WebSocket (chosen)                                        | SSE (`EventSource`) |
+|---|-----------------------------------------------------------|---|
+| **Fits one-way traffic** | over-spec'd — bidirectional + binary framing unused       | purpose-built |
+| **Reconnect on drop** | hand-rolled (exponential backoff, jitter, disposal guard) | free, built into the browser |
+| **Missed-event replay** | none — reconnect refetches instead                        | `Last-Event-ID`, if the server retains events |
+| **Auth** | no custom headers → token in query string                 | *same* — `EventSource` can't set headers either |
+| **Server (FastAPI)** | first-class: `@app.websocket`, `WebSocketDisconnect`      | `StreamingResponse` + manual `text/event-stream` framing + `is_disconnected()` polling |
+| **Connections per origin** | not subject to the HTTP/1.1 limit                         | consumes one of ~6 (moot here: ≤2 streams, and block transfers hit B2's origin) |
 
 - **Reconnect had to be hand-rolled** — `EventSource` ships with it. The strongest
   argument that SSE was the better fit.
@@ -800,7 +800,7 @@ volume grows.
 - **Sync client** — folder watcher, push/pull, WebSocket-driven pull.
 - **Real-time** — `ChangeBus` over Redis pub/sub, so a commit on one server reaches
   a device on another. Each route notifies exactly the users whose view changed.
-  The client socket reconnects with jittered backoff and refetches on reopen.
+  The client socket reconnects with jittered exponential backoff and refetches on reopen.
 - **Sharing** — user-to-user grants and public share-links, both revocable, links
   also expiring. Authorization never touches storage. Revocation closes the read
   window in 5 minutes (`s3_url_ttl_seconds`), bounded below by download speed.
