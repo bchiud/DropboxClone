@@ -11,6 +11,9 @@ class ShareRepository(ABC):
     def remove(self, owner: str, path: str, shared_with: str) -> None: ...
 
     @abstractmethod
+    def remove_all_for_path(self, owner: str, path: str) -> int: ...
+
+    @abstractmethod
     def exists(self, owner: str, path: str, shared_with: str) -> bool: ...
 
     @abstractmethod

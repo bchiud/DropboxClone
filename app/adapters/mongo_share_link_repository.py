@@ -15,6 +15,9 @@ class MongoShareLinkRepository(ShareLinkRepository):
     def delete(self, owner: str, jti: str) -> None:
         self._collection.delete_one({'owner': owner, 'jti': jti})
 
+    def delete_all_for_path(self, owner: str, path: str) -> int:
+        return self._collection.delete_many({'owner': owner, 'path': path}).deleted_count
+
     def exists(self, jti: str) -> bool:
         return self._collection.find_one({'jti': jti}) is not None
 

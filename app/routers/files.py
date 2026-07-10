@@ -51,10 +51,12 @@ async def commit(
 async def delete(
         path: RootedPath,
         file_service: FileService = Depends(get_file_service),
+        share_service: ShareService = Depends(get_share_service),
         notifier: Notifier = Depends(get_notifier),
         current_user: str = Depends(get_current_user),
 ) -> None:
     try:
+        share_service.purge_for_file(owner=current_user, path=path)
         file_service.delete_file(owner=current_user, path=path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")

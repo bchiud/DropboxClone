@@ -20,6 +20,12 @@ class FakeShareRepository:
     def remove(self, owner: str, path: str, shared_with: str) -> None:
         self.shares.pop((owner, path, shared_with), None)
 
+    def remove_all_for_path(self, owner: str, path: str) -> int:
+        doomed = [k for k in self.shares if k[0] == owner and k[1] == path]
+        for k in doomed:
+            del self.shares[k]
+        return len(doomed)
+
     def exists(self, owner: str, path: str, shared_with: str) -> bool:
         return (owner, path, shared_with) in self.shares
 
@@ -42,6 +48,12 @@ class FakeShareLinkRepository:
     def delete(self, owner: str, jti: str) -> None:
         if jti in self.links and self.links[jti].owner == owner:
             del self.links[jti]
+
+    def delete_all_for_path(self, owner: str, path: str) -> int:
+        doomed = [j for j, ln in self.links.items() if ln.owner == owner and ln.path == path]
+        for j in doomed:
+            del self.links[j]
+        return len(doomed)
 
     def exists(self, jti: str) -> bool:
         return jti in self.links
@@ -154,3 +166,71 @@ def test_list_links_returns_the_owners_links(service):
     svc.create_link("carol", "/z.txt")
     paths = {ln.path for ln in svc.list_links("bob")}
     assert paths == {"/x.txt", "/y.txt"}
+
+
+# --- purge on delete ---
+
+def test_purge_for_file_drops_every_grant_and_link_on_that_file(service):
+    svc, repo, links = service
+    svc.share("bob", "/x.txt", "alice")
+    svc.share("bob", "/x.txt", "carol")
+    svc.create_link("bob", "/x.txt")
+    svc.create_link("bob", "/x.txt")
+
+    svc.purge_for_file("bob", "/x.txt")
+
+    assert repo.shares == {}
+    assert links.links == {}
+
+
+def test_purge_for_file_spares_the_owners_other_files(service):
+    svc, repo, links = service
+    svc.share("bob", "/doomed.txt", "alice")
+    svc.share("bob", "/keep.txt", "alice")
+    svc.create_link("bob", "/keep.txt")
+
+    svc.purge_for_file("bob", "/doomed.txt")
+
+    assert list(repo.shares) == [("bob", "/keep.txt", "alice")]
+    assert [ln.path for ln in links.links.values()] == ["/keep.txt"]
+
+
+def test_purge_for_file_spares_an_identical_path_owned_by_someone_else(service):
+    svc, repo, links = service
+    svc.share("bob", "/x.txt", "alice")
+    svc.share("carol", "/x.txt", "alice")  # same path, different owner
+
+    svc.purge_for_file("bob", "/x.txt")
+
+    assert list(repo.shares) == [("carol", "/x.txt", "alice")]
+
+
+def test_purge_for_file_is_idempotent(service):
+    svc, repo, links = service
+    svc.share("bob", "/x.txt", "alice")
+
+    svc.purge_for_file("bob", "/x.txt")
+    svc.purge_for_file("bob", "/x.txt")  # nothing left to purge
+
+    assert repo.shares == {}
+
+
+def test_purge_for_file_ends_a_recipients_read_access(service):
+    svc, _, _ = service
+    svc.share("bob", "/x.txt", "alice")
+    assert svc.can_read(requester="alice", owner="bob", path="/x.txt") is True
+
+    svc.purge_for_file("bob", "/x.txt")
+
+    assert svc.can_read(requester="alice", owner="bob", path="/x.txt") is False
+
+
+def test_purge_for_file_kills_a_public_link(service):
+    svc, _, _ = service
+    token = svc.create_link("bob", "/x.txt")
+    assert svc.resolve_link(token) == ("bob", "/x.txt")
+
+    svc.purge_for_file("bob", "/x.txt")
+
+    # the jti row is gone, so the still-valid token no longer resolves
+    assert svc.resolve_link(token) is None

@@ -19,6 +19,9 @@ class MongoShareRepository(ShareRepository):
     def remove(self, owner: str, path: str, shared_with: str) -> None:
         self._collection.delete_one(filter={"owner": owner, "path": path, "shared_with": shared_with})
 
+    def remove_all_for_path(self, owner: str, path: str) -> int:
+        return self._collection.delete_many(filter={"owner": owner, "path": path}).deleted_count
+
     def exists(self, owner: str, path: str, shared_with: str) -> bool:
         return self._collection.find_one(filter={"owner": owner, "path": path, "shared_with": shared_with}) is not None
 

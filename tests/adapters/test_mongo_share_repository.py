@@ -64,3 +64,20 @@ def test_list_for_owner_returns_shares(repo):
     result = r.list_for_owner("bob")
     assert col.find.call_args.args == ({"owner": "bob"}, {"_id": 0})
     assert isinstance(result[0], Share)
+
+
+def test_remove_all_for_path_deletes_every_grant_on_that_file(repo):
+    r, col = repo
+    col.delete_many.return_value = MagicMock(deleted_count=3)
+
+    removed = r.remove_all_for_path("bob", "/x.txt")
+
+    # scoped to (owner, path) — NOT the triple: every recipient of this file goes
+    assert col.delete_many.call_args.kwargs["filter"] == {"owner": "bob", "path": "/x.txt"}
+    assert removed == 3
+
+
+def test_remove_all_for_path_reports_zero_when_nothing_matched(repo):
+    r, col = repo
+    col.delete_many.return_value = MagicMock(deleted_count=0)
+    assert r.remove_all_for_path("bob", "/never-shared.txt") == 0

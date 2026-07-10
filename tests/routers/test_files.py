@@ -43,16 +43,21 @@ class FakeService:
 
 
 class FakeShareService:
-    def __init__(self, allow):
+    def __init__(self, allow=True, log=None):
         self.allow = allow
+        self.log = log if log is not None else []
 
     def can_read(self, requester, owner, path):
         return self.allow
+
+    def purge_for_file(self, owner, path):
+        self.log.append(("purge", owner, path))
 
 
 @pytest.fixture
 def client():
     app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -113,6 +118,7 @@ def test_delete_missing_returns_404(client):
 def test_delete_notifies_owner_on_success():
     notifier = AsyncMock()
     app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
     app.dependency_overrides[get_notifier] = lambda: notifier
     try:
@@ -126,6 +132,7 @@ def test_delete_notifies_owner_on_success():
 def test_delete_does_not_notify_on_404():
     notifier = AsyncMock()
     app.dependency_overrides[get_file_service] = lambda: FakeService()
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
     app.dependency_overrides[get_notifier] = lambda: notifier
     try:
@@ -189,5 +196,47 @@ def test_commit_does_not_notify_on_409():
             "/files/commit", json={"path": "/a.txt", "size": 5, "block_hashes": ["missing"]})
         assert resp.status_code == 409
         notifier.notify.assert_not_awaited()
+    finally:
+        app.dependency_overrides.clear()
+
+
+# --- delete cascades to grants ---
+
+def _ordering_client():
+    """A client whose file + share services append to one shared event log."""
+    events = []
+
+    class LoggingFileService(FakeService):
+        def delete_file(self, owner, path):
+            super().delete_file(owner, path)  # raises for an unknown path
+            events.append(("delete", owner, path))  # only a real delete is logged
+
+    app.dependency_overrides[get_file_service] = lambda: LoggingFileService()
+    app.dependency_overrides[get_share_service] = lambda: FakeShareService(log=events)
+    app.dependency_overrides[get_current_user] = lambda: "test-user"
+    return TestClient(app), events
+
+
+def test_delete_purges_grants_before_removing_the_recipe():
+    """Purge-first fails safe: a crash mid-way leaves a live file with no grants,
+    never a dead path with live grants (which would resurrect on re-upload)."""
+    client, events = _ordering_client()
+    try:
+        assert client.delete("/files", params={"path": "/known.txt"}).status_code == 204
+        assert events == [
+            ("purge", "test-user", "/known.txt"),
+            ("delete", "test-user", "/known.txt"),
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_of_a_missing_file_still_purges_its_dangling_grants():
+    """404 path: grants on a file that doesn't exist are exactly the garbage
+    purge-first is meant to collect, and owner comes from the token."""
+    client, events = _ordering_client()
+    try:
+        assert client.delete("/files", params={"path": "/nope.txt"}).status_code == 404
+        assert events == [("purge", "test-user", "/nope.txt")]  # no delete recorded
     finally:
         app.dependency_overrides.clear()

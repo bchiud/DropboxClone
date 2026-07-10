@@ -11,6 +11,9 @@ class ShareLinkRepository(ABC):
     def delete(self, owner: str, jti: str) -> None: ...
 
     @abstractmethod
+    def delete_all_for_path(self, owner: str, path: str) -> int: ...
+
+    @abstractmethod
     def exists(self, jti: str) -> bool: ...
 
     @abstractmethod

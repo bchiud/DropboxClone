@@ -250,9 +250,9 @@ The access pattern drove this, not the data volume:
 **The cost — referential integrity.** Nothing here *requires* NoSQL; Postgres would
 serve this data fine.
 
-- **What we gave up.** `delete_file` removes only the recipe, so `shares` and
-  `share_links` rows pointing at that path survive as dangling references — an
-  invariant the application layer must remember, not one the store enforces.
+- **What we gave up.** The cascade on delete is hand-rolled (`purge_for_file`) and
+  non-atomic — an invariant the application layer must remember, not one the store
+  enforces. Grant a share on a path that doesn't exist and it's silently accepted.
 - **But `ON DELETE CASCADE` is only half a fix.** A foreign key on the *natural* key
   `(owner, path)` clears the rows, then happily resurrects them: delete
   `/report.pdf`, commit a new one at the same path, and the old grants reattach.
@@ -406,13 +406,11 @@ both computed once in `create_link`, so the JWT and the DB can never disagree.
   so they're inert; a TTL index or a sweep can reap them later.
 - **Granting a nonexistent path** is silently accepted, creating a dangling grant
   that resolves to `404` on access.
-- **Deleting a file leaves its grants behind.** `delete_file` removes only the
-  recipe, so the `shares` and `share_links` rows keyed on that `(owner, path)`
-  survive. Reads still `404` (the recipe is gone) — but **re-creating a file at the
-  same path silently reattaches every stale grant and un-expired link**, an
-  authorization bug that needs a delete-then-recreate to fire. Near-term fix: purge
-  a file's grants on delete. Durable fix: key grants on an immutable `file_id`, so a
-  re-created file can never match them.
+- **Deleting a file purges its grants — but not atomically.** `DELETE /files` runs
+  `purge_for_file` **before** `delete_file`. Purge-first fails safe: with no
+  cross-collection transaction, a crash between the writes leaves a live file with
+  no grants (recoverable), never a dead path with live grants (which would reattach
+  on re-upload). Closing that window for good needs an immutable `file_id`.
 
 ---
 
@@ -751,7 +749,8 @@ volume grows.
   hash-verified download, delete, sharing (grant to a user, list and revoke a file's
   recipients, mint/copy/revoke public links), and a no-auth public download page.
 - **File deletion** — `DELETE /files`, owner-scoped from the token; removes the
-  recipe only and leaves blocks for GC.
+  recipe and leaves blocks for GC. Cascades to sharing: `purge_for_file` drops the
+  file's grants and links **before** the recipe is deleted, so nothing dangles.
 - **Refresh tokens** — short-lived access + long-lived refresh with a Mongo
   `jti` allowlist and TTL auto-reap; `/auth/refresh` mints new access tokens,
   `/auth/logout` revokes; `typ`-guarded so access/refresh/share tokens can't be
@@ -765,9 +764,6 @@ volume grows.
 - **100% test coverage.**
 
 **Next:**
-- Purge a file's grants on delete — today `delete_file` leaves `shares` and
-  `share_links` rows behind (see [Sharing tradeoffs](#sharing--permissions)); the
-  "Shared with you" tab now renders them as rows that `404` on download.
 - Notify a grant's recipients on commit, so "Shared with you" live-updates like
   "Your files" does. `commit` currently notifies only the owner.
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file).

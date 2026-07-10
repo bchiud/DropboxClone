@@ -53,3 +53,19 @@ def test_list_for_owner_projects_id_and_rebuilds_links(repo):
     assert col.find.call_args.args == ({"owner": "bob"}, {"_id": 0})
     assert len(result) == 1
     assert isinstance(result[0], ShareLink)
+
+
+def test_delete_all_for_path_deletes_every_link_on_that_file(repo):
+    r, col = repo
+    col.delete_many.return_value = MagicMock(deleted_count=2)
+
+    deleted = r.delete_all_for_path("bob", "/x.txt")
+
+    assert col.delete_many.call_args.args[0] == {"owner": "bob", "path": "/x.txt"}
+    assert deleted == 2
+
+
+def test_delete_all_for_path_reports_zero_when_nothing_matched(repo):
+    r, col = repo
+    col.delete_many.return_value = MagicMock(deleted_count=0)
+    assert r.delete_all_for_path("bob", "/never-linked.txt") == 0
