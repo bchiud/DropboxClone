@@ -2,6 +2,8 @@ from collections import defaultdict
 
 from fastapi import WebSocket
 
+from app.ports.change_bus import ChangeBus
+
 
 class ConnectionManager:
     def __init__(self):
@@ -26,3 +28,15 @@ class ConnectionManager:
 
     def connection_for(self, username: str) -> set[WebSocket]:
         return self._connections.get(username, set())
+
+
+class Notifier:
+    def __init__(self, bus: ChangeBus, manager: ConnectionManager) -> None:
+        self._bus = bus
+        self._manager = manager
+
+    async def notify(self, username: str) -> None:
+        await self._bus.publish(username)  # broadcast to every server
+
+    async def start(self) -> None:
+        await self._bus.listen(self._manager.notify)  # local fan-out on each message

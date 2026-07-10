@@ -53,27 +53,27 @@ Hexagonal (ports & adapters) with dependency injection. Dependencies point
 **inward**: the outer layers depend on the inner ones, never the reverse.
 
 ```
-                 ┌─────────────────────────────────────────┐
-   HTTP  ───────▶│  routers/         (FastAPI APIRouters)   │  presentation
-                 └───────────────────┬─────────────────────┘
-                                     │ Depends(...)
-                 ┌───────────────────▼─────────────────────┐
-                 │  application/     (FileService,          │  use cases /
-                 │                    AuthService)          │  orchestration
-                 └───────┬───────────────────────┬─────────┘
-                         │ depends on ports        │ uses
-             ┌───────────▼─────────┐   ┌───────────▼─────────┐
-             │  ports/  (abstract  │   │  domain/  (chunker, │  pure core
-             │  interfaces)        │   │  security) + models/│  (no I/O)
-             └───────────▲─────────┘   └─────────────────────┘
-                         │ implemented by
-             ┌───────────┴─────────────────────────────────┐
-             │  adapters/  (B2BlockStore, MongoFileRepo,    │  infrastructure
-             │              MongoUserRepo)                  │
-             └─────────────────────────────────────────────┘
+   HTTP / WebSocket
+          │
+          ▼
+   ┌──────────────────┐
+   │  routers/        │  presentation
+   └────────┬─────────┘
+            │ Depends(...)
+   ┌────────▼─────────┐     ┌───────────────────────┐
+   │  application/    │ ──▶ │  domain/ + models/    │  pure core (no I/O)
+   └────────┬─────────┘     └───────────────────────┘
+            │ depends on ports
+   ┌────────▼─────────┐
+   │  ports/          │  abstract interfaces (ABCs)
+   └────────▲─────────┘
+            │ implemented by
+   ┌────────┴─────────┐
+   │  adapters/       │  infrastructure  ·  B2 · Mongo · Redis
+   └──────────────────┘
 
-   dependencies.py  = composition root (wires adapters → services)
-   auth_dependencies.py = get_current_user (bearer token → username)
+   composition root: dependencies.py wires adapters → services
+   cross-cutting:    auth_dependencies.py (bearer → user) · realtime.py (Notifier + ConnectionManager)
 ```
 
 **Why this shape:** the domain and application layers never import FastAPI, boto3,
@@ -81,15 +81,32 @@ or pymongo. You could swap B2 for local disk, or Mongo for Postgres, by writing 
 new adapter and changing one line in `dependencies.py` — nothing else moves. The
 services are unit-tested with in-memory fakes, no cloud required.
 
+**Realtime path (pub/sub).** A commit/delete publishes onto a `ChangeBus`; every
+server runs a subscribe-loop that fans out to *its own* WebSockets — so a change on
+one server reaches a device connected to any other. The bus is a port: Redis in
+production, in-process when `REDIS_URL` is unset.
+
+```
+   commit/delete ─▶ Notifier.notify(user) ─▶ ChangeBus.publish(user)
+                                                    │  Redis pub/sub
+                             ┌──────────────────────┴──────────────────────┐
+                             ▼                                              ▼
+                    Server A: listen-loop                         Server B: listen-loop
+                             │                                              │
+                    ConnectionManager.notify                     ConnectionManager.notify
+                             │                                              │
+                    Alice's sockets ✔                            (holds none) no-op
+```
+
 ### Layers
 
 | Layer | Directory | Knows about | Example |
 |-------|-----------|-------------|---------|
 | Presentation | `app/routers/` | HTTP, FastAPI | `files.py`, `auth.py`, `shares.py`, `link.py` |
 | Application | `app/application/` | ports, domain | `FileService`, `AuthService`, `ShareService` |
-| Domain | `app/domain/`, `app/models/` | nothing external | `chunker`, `security`, Pydantic models |
-| Ports | `app/ports/` | — (abstract) | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository` |
-| Adapters | `app/adapters/` | B2, Mongo | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository` |
+| Domain | `app/domain/`, `app/models/` | nothing external | `security`, Pydantic models |
+| Ports | `app/ports/` | — (abstract) | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository`, `RefreshTokenRepository`, `ChangeBus` |
+| Adapters | `app/adapters/` | B2, Mongo, Redis | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository`, `MongoRefreshTokenRepository`, `RedisChangeBus`, `InMemoryChangeBus` |
 
 ---
 
@@ -97,47 +114,51 @@ services are unit-tested with in-memory fakes, no cloud required.
 
 ```
 app/
-├── main.py                 # thin assembler: create app + include_router
+├── main.py                 # thin assembler: app + include_router + lifespan (Notifier)
 ├── config.py               # Settings (pydantic-settings, loads .env)
 ├── dependencies.py         # composition root; @lru_cache lazy singletons
 ├── auth_dependencies.py    # get_current_user (OAuth2 bearer → username)
-│
-├── realtime.py             # ConnectionManager: in-memory WebSocket registry per user
+├── realtime.py             # ConnectionManager (local WS registry) + Notifier (ChangeBus ↔ sockets)
 │
 ├── routers/                # presentation — HTTP routes
-│   ├── files.py            #   /files   list · commit · recipe (share-aware)
+│   ├── files.py            #   /files   list · commit · recipe · delete (share-aware)
 │   ├── blocks.py           #   /blocks  missing · upload-urls · download-urls (share-aware)
-│   ├── auth.py             #   /auth    register · login
+│   ├── auth.py             #   /auth    register · login · refresh · logout
 │   ├── shares.py           #   /shares  grant · revoke · incoming · outgoing · link (mint · revoke · list)
 │   ├── link.py             #   /link    public token-only recipe · download-urls (no auth)
 │   └── ws.py               #   /ws      WebSocket: push "changed" to a user's devices
 │
 ├── application/            # use-case orchestrators (no framework deps)
-│   ├── file_service.py     #   FileService: list · missing_blocks · upload_urls · commit_file · get_recipe
-│   ├── auth_service.py     #   AuthService: register / authenticate
+│   ├── file_service.py     #   FileService: missing_blocks · upload_urls · commit_file · get_recipe · delete_file
+│   ├── auth_service.py     #   AuthService: register · authenticate · refresh · logout
 │   └── share_service.py    #   ShareService: share · revoke · list · can_read · create/revoke/list/resolve_link
 │
 ├── domain/                 # pure logic, no I/O
-│   └── security.py         #   bcrypt hashing + JWT (access + share-link) encode/decode
+│   └── security.py         #   bcrypt + JWT (access · refresh · share) encode/decode · new_jti
 │
 ├── models/                 # Pydantic schemas (the "NoSQL schema")
 │   ├── file.py             #   FileMeta → FileSummary / FileRecord
-│   ├── user.py             #   User, UserRegisterRequest/Response, TokenResponse
+│   ├── user.py             #   User, RefreshToken, Token/AccessToken/Refresh req+resp
 │   └── share.py            #   Share, ShareRequest, ShareLink, ShareLinkRequest
 │
 ├── ports/                  # abstract interfaces (ABCs)
-│   ├── block_store.py           #   BlockStore
-│   ├── file_repository.py       #   FileRepository
-│   ├── user_repository.py       #   UserRepository
-│   ├── share_repository.py      #   ShareRepository
-│   └── share_link_repository.py #   ShareLinkRepository
+│   ├── block_store.py              #   BlockStore
+│   ├── file_repository.py          #   FileRepository
+│   ├── user_repository.py          #   UserRepository
+│   ├── share_repository.py         #   ShareRepository
+│   ├── share_link_repository.py    #   ShareLinkRepository
+│   ├── refresh_token_repository.py #   RefreshTokenRepository (jti allowlist)
+│   └── change_bus.py               #   ChangeBus (realtime pub/sub)
 │
 └── adapters/               # concrete implementations
-    ├── b2_block_store.py              # BlockStore          → Backblaze B2 (boto3)
-    ├── mongo_file_repository.py       # FileRepository      → MongoDB
-    ├── mongo_user_repository.py       # UserRepository      → MongoDB
-    ├── mongo_share_repository.py      # ShareRepository     → MongoDB
-    └── mongo_share_link_repository.py # ShareLinkRepository → MongoDB
+    ├── b2_block_store.py                 # BlockStore             → Backblaze B2 (boto3)
+    ├── mongo_file_repository.py          # FileRepository         → MongoDB
+    ├── mongo_user_repository.py          # UserRepository         → MongoDB
+    ├── mongo_share_repository.py         # ShareRepository        → MongoDB
+    ├── mongo_share_link_repository.py    # ShareLinkRepository    → MongoDB
+    ├── mongo_refresh_token_repository.py # RefreshTokenRepository → MongoDB
+    ├── in_memory_change_bus.py           # ChangeBus              → in-process (default)
+    └── redis_change_bus.py               # ChangeBus              → Redis pub/sub
 
 client/                     # the sync client — imports nothing from app/
 ├── chunker.py              #   client-side chunking (block hash = shared contract)
@@ -357,7 +378,10 @@ S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION, S3_BUCKET
 JWT_SECRET                        # required; generate: python -c "import secrets; print(secrets.token_urlsafe(48))"
 JWT_ALGORITHM=HS256               # optional
 ACCESS_TOKEN_EXPIRE_MINUTES=60    # optional
+REFRESH_TOKEN_EXPIRE_MINUTES=10080 # optional (default 7 days) — refresh-token lifetime
 SHARE_LINK_EXPIRE_MINUTES=10080   # optional (default 7 days) — public share-link lifetime
+REDIS_URL                         # optional; set to enable multi-server realtime
+                                  #   (Redis pub/sub). Unset = single-process in-memory bus.
 ```
 
 > **macOS note:** MongoDB Atlas TLS requires `certifi` (`tlsCAFile=certifi.where()`),
@@ -382,6 +406,11 @@ cp .env.example .env            # then fill in real values (see Configuration)
 ```bash
 uvicorn app.main:app --reload   # serves on http://127.0.0.1:8000
 ```
+
+> **Multi-server (optional):** realtime works out of the box on one server via an
+> in-process bus. To run multiple app servers, start Redis (`redis-server`) and
+> set `REDIS_URL=redis://localhost:6379` — `notify` then fans out across servers
+> via Redis pub/sub instead of staying local.
 
 Open **http://127.0.0.1:8000/docs** for the interactive Swagger UI. Create an
 account there (or via `curl`) before running the client:
@@ -577,15 +606,18 @@ starts to hurt:
 
 Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
 
-- **The WebSocket registry is single-process.** `realtime.ConnectionManager` holds
-  connections in memory, so the moment you run more than one uvicorn worker, a
-  commit on instance A can't notify a socket on instance B. This is the *first*
-  thing that breaks on horizontal scale. Fix: a **pub/sub bus** (Redis pub/sub or
-  a broker) so any instance can fan out `{"type":"changed"}` to any client — which
-  also removes the need for sticky WebSocket sessions.
+- **Cross-server realtime fan-out — done.** This *was* the first thing to break
+  on horizontal scale: `realtime.ConnectionManager` holds sockets in-process, so a
+  commit on instance A couldn't notify a socket on instance B. It's now solved by
+  the **`ChangeBus`** — `notify` publishes to Redis pub/sub and every server fans
+  out `{"type":"changed"}` to its own sockets (see the Architecture "Realtime
+  path"). Sticky WebSocket sessions are no longer needed. Falls back to an
+  in-process bus when `REDIS_URL` is unset. What's left here is *tuning*, not
+  architecture: per-user channels instead of one global channel if publish volume
+  ever gets hot.
 - **The app tier is nearly stateless already.** Auth is a stateless JWT and bytes
   bypass the app, so FastAPI instances scale horizontally behind a load balancer
-  with autoscaling. The pub/sub bus above is what makes that fully true.
+  with autoscaling — and with the pub/sub bus shipped, that's now fully true.
 - **Mongo indexing & sharding.** Add compound indexes on the hot paths
   (`files` by `(owner, path)`, `share_links` by `jti`); at very large scale,
   **shard on `owner`** so a user's files and blocks colocate.
@@ -598,43 +630,53 @@ Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
   this size but won't scale — the endgame is **per-block reference counting** or an
   incremental mark-and-sweep, not a full bucket + collection scan.
 
-The highest-leverage single step is the **Redis pub/sub swap** behind
-`ConnectionManager`: it's small, and it's the thing that unlocks running more than
-one server at all.
+The highest-leverage step — the **Redis pub/sub bus** behind `ConnectionManager`,
+which unlocks running more than one server at all — is **done**. With the app tier
+now horizontally scalable, the next control-plane investments are **Mongo indexing
+& sharding** and **reference-counted GC**, both of which matter only as data
+volume grows.
 
 ---
 
 ## Status & roadmap
 
-**Done:** content-addressed storage, chunking/dedup, REST API, JWT auth, full
-ports/adapters architecture, sync client (folder watcher + push/pull),
-delta sync (client-side chunking + have/need negotiation + presigned
-direct-to-B2 transfer + per-user block scoping + re-verify-on-read),
-**real-time sync** (WebSocket push: commit notifies the owner's devices, which
-pull instantly instead of polling),
-**sharing & permissions** (read-only user-to-user grants + public share-links
-with **expiry and revocation** — an `exp` claim plus a `jti` allowlist in Mongo —
-all gated by an authorization layer that never touches storage),
-**web UI** (React + Vite: auth, file list, upload, hash-verified download,
-delete, sharing — grant to a user, mint/copy/revoke public links, and a no-auth
-public download page),
-**file deletion** (`DELETE /files`, owner-scoped from the token; removes the
-recipe only and leaves blocks for GC),
-**refresh tokens** (short-lived access + long-lived refresh with a Mongo `jti`
-allowlist and TTL auto-reap; `/auth/refresh` mints new access tokens,
-`/auth/logout` revokes; `typ`-guarded so access/refresh/share tokens can't be
-swapped; web session survives reload and auto-refreshes on a 401),
-**data-integrity constraint** (unique index on `username`), 100% test coverage.
+**Done:**
+- **Core storage** — content-addressed storage, chunking/dedup, REST API,
+  JWT auth, full ports/adapters architecture.
+- **Sync client** — folder watcher + push/pull.
+- **Delta sync** — client-side chunking + have/need negotiation + presigned
+  direct-to-B2 transfer + per-user block scoping + re-verify-on-read.
+- **Real-time sync** — WebSocket push: commit notifies the owner's devices,
+  which pull instantly instead of polling.
+- **Sharing & permissions** — read-only user-to-user grants + public share-links
+  with **expiry and revocation** (an `exp` claim plus a `jti` allowlist in
+  Mongo), all gated by an authorization layer that never touches storage.
+- **Web UI** — React + Vite: auth, file list, upload, hash-verified download,
+  delete, sharing (grant to a user, mint/copy/revoke public links), and a
+  no-auth public download page.
+- **File deletion** — `DELETE /files`, owner-scoped from the token; removes the
+  recipe only and leaves blocks for GC.
+- **Refresh tokens** — short-lived access + long-lived refresh with a Mongo
+  `jti` allowlist and TTL auto-reap; `/auth/refresh` mints new access tokens,
+  `/auth/logout` revokes; `typ`-guarded so access/refresh/share tokens can't be
+  swapped; web session survives reload and auto-refreshes on a 401.
+- **Horizontal-scale realtime** — a `ChangeBus` port behind the WebSocket layer:
+  `notify` publishes to Redis pub/sub and every server fans out to its own local
+  sockets, so a commit on one server reaches a device connected to another
+  (verified with a live two-process test; falls back to an in-process bus when
+  `REDIS_URL` is unset).
+- **Data-integrity constraint** — unique index on `username`.
+- **100% test coverage.**
 
 **Next:**
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file).
 - Content-defined chunking (so delta survives insertions).
 - Streaming chunking for very large files (avoid reading whole file into memory).
-- Multi-server scaling: Redis pub/sub behind the WebSocket ConnectionManager.
 - Orphaned-block garbage collection — now unlocked, since delete is the first
   operation that creates real orphans; `scripts/audit_storage.py` is the cleanup
   path, and a scheduled mark-and-sweep GC finally has a use case.
 
-**Hardening backlog:** file versioning (conflict copies), refresh-token rotation
-(currently non-rotating), httpOnly-cookie storage (currently `localStorage`).
-```
+**Hardening backlog:**
+- File versioning (conflict copies).
+- Refresh-token rotation (currently non-rotating).
+- httpOnly-cookie token storage (currently `localStorage`).

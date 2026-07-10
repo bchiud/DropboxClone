@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 from app.application.file_service import MissingBlocks
 from app.auth_dependencies import get_current_user
-from app.dependencies import get_connection_manager, get_file_service, get_share_service
+from app.dependencies import get_notifier, get_file_service, get_share_service
 from app.models.file import FileRecord, FileSummary
 from app.main import app
 
@@ -111,27 +111,27 @@ def test_delete_missing_returns_404(client):
 
 
 def test_delete_notifies_owner_on_success():
-    manager = AsyncMock()
+    notifier = AsyncMock()
     app.dependency_overrides[get_file_service] = lambda: FakeService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
-    app.dependency_overrides[get_connection_manager] = lambda: manager
+    app.dependency_overrides[get_notifier] = lambda: notifier
     try:
         resp = TestClient(app).delete("/files", params={"path": "/known.txt"})
         assert resp.status_code == 204
-        manager.notify.assert_awaited_once_with("test-user")
+        notifier.notify.assert_awaited_once_with("test-user")
     finally:
         app.dependency_overrides.clear()
 
 
 def test_delete_does_not_notify_on_404():
-    manager = AsyncMock()
+    notifier = AsyncMock()
     app.dependency_overrides[get_file_service] = lambda: FakeService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
-    app.dependency_overrides[get_connection_manager] = lambda: manager
+    app.dependency_overrides[get_notifier] = lambda: notifier
     try:
         resp = TestClient(app).delete("/files", params={"path": "/nope.txt"})
         assert resp.status_code == 404
-        manager.notify.assert_not_awaited()
+        notifier.notify.assert_not_awaited()
     finally:
         app.dependency_overrides.clear()
 
@@ -166,28 +166,28 @@ def test_recipe_without_grant_returns_404():
 # --- commit notifies over WebSocket ---
 
 def test_commit_notifies_owner_on_success():
-    manager = AsyncMock()
+    notifier = AsyncMock()
     app.dependency_overrides[get_file_service] = lambda: FakeService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
-    app.dependency_overrides[get_connection_manager] = lambda: manager
+    app.dependency_overrides[get_notifier] = lambda: notifier
     try:
         resp = TestClient(app).post(
             "/files/commit", json={"path": "/a.txt", "size": 5, "block_hashes": ["h1"]})
         assert resp.status_code == 201
-        manager.notify.assert_awaited_once_with("test-user")
+        notifier.notify.assert_awaited_once_with("test-user")
     finally:
         app.dependency_overrides.clear()
 
 
 def test_commit_does_not_notify_on_409():
-    manager = AsyncMock()
+    notifier = AsyncMock()
     app.dependency_overrides[get_file_service] = lambda: FakeService()
     app.dependency_overrides[get_current_user] = lambda: "test-user"
-    app.dependency_overrides[get_connection_manager] = lambda: manager
+    app.dependency_overrides[get_notifier] = lambda: notifier
     try:
         resp = TestClient(app).post(
             "/files/commit", json={"path": "/a.txt", "size": 5, "block_hashes": ["missing"]})
         assert resp.status_code == 409
-        manager.notify.assert_not_awaited()
+        notifier.notify.assert_not_awaited()
     finally:
         app.dependency_overrides.clear()

@@ -3,9 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.application.file_service import FileService, MissingBlocks
 from app.application.share_service import ShareService
 from app.auth_dependencies import get_current_user
-from app.dependencies import get_connection_manager, get_file_service, get_share_service
+from app.dependencies import get_file_service, get_notifier, get_share_service
 from app.models.file import CommitFileRequest, FileRecord
-from app.realtime import ConnectionManager
+from app.realtime import Notifier
 
 router = APIRouter(
     prefix="/files",
@@ -26,7 +26,7 @@ async def commit(
         body: CommitFileRequest,
         file_service: FileService = Depends(get_file_service),
         current_user: str = Depends(get_current_user),
-        connection_manager: ConnectionManager = Depends(get_connection_manager),
+        notifier: Notifier = Depends(get_notifier),
 ) -> dict:
     try:
         file_record: FileRecord = file_service.commit_file(
@@ -38,7 +38,7 @@ async def commit(
     except MissingBlocks as mb:
         raise HTTPException(status_code=409, detail={"missing": mb.hashes})
 
-    await connection_manager.notify(current_user)
+    await notifier.notify(current_user)
     return {
         "path": file_record.path,
         "size": file_record.size,
@@ -50,14 +50,14 @@ async def commit(
 async def delete(
         path: str,
         file_service: FileService = Depends(get_file_service),
-        connection_manager: ConnectionManager = Depends(get_connection_manager),
+        notifier: Notifier = Depends(get_notifier),
         current_user: str = Depends(get_current_user),
 ) -> None:
     try:
         file_service.delete_file(owner=current_user, path=path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
-    await connection_manager.notify(current_user)
+    await notifier.notify(current_user)
 
 
 @router.get("/recipe")

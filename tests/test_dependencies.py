@@ -8,8 +8,9 @@ from app.application.auth_service import AuthService
 from app.application.file_service import FileService
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
+from app.ports.change_bus import ChangeBus
 from app.ports.user_repository import UserRepository
-from app.realtime import ConnectionManager
+from app.realtime import ConnectionManager, Notifier
 
 
 def test_block_store_is_cached_singleton():
@@ -61,3 +62,39 @@ def test_connection_manager_is_cached_singleton():
     b = dependencies.get_connection_manager()
     assert a is b
     assert isinstance(a, ConnectionManager)
+
+
+def test_change_bus_defaults_to_in_memory_without_redis_url():
+    from app.adapters.in_memory_change_bus import InMemoryChangeBus
+
+    dependencies.get_change_bus.cache_clear()
+    try:
+        with patch.object(dependencies.settings, "redis_url", None):
+            bus = dependencies.get_change_bus()
+        assert isinstance(bus, InMemoryChangeBus)
+        assert isinstance(bus, ChangeBus)
+    finally:
+        dependencies.get_change_bus.cache_clear()
+
+
+def test_change_bus_uses_redis_when_url_is_set():
+    # from_url builds the client lazily (no connection), so no live Redis needed.
+    from app.adapters.redis_change_bus import RedisChangeBus
+
+    dependencies.get_change_bus.cache_clear()
+    try:
+        with patch.object(dependencies.settings, "redis_url", "redis://localhost:6379"):
+            bus = dependencies.get_change_bus()
+        assert isinstance(bus, RedisChangeBus)
+    finally:
+        dependencies.get_change_bus.cache_clear()  # reset so other tests get in-memory
+
+
+def test_get_notifier_composes_a_notifier():
+    dependencies.get_notifier.cache_clear()
+    dependencies.get_change_bus.cache_clear()
+    try:
+        assert isinstance(dependencies.get_notifier(), Notifier)
+    finally:
+        dependencies.get_notifier.cache_clear()
+        dependencies.get_change_bus.cache_clear()

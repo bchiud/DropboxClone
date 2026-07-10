@@ -22,5 +22,8 @@ class Settings(BaseSettings):
     refresh_token_expire_minutes: int = 60 * 24 * 7  # 7 days
     share_link_expire_minutes: int = 10080
 
+    # Realtime (pub/sub)
+    redis_url: str | None = None  # None -> single-process in-memory bus
+
 
 settings = Settings()
