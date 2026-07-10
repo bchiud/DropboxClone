@@ -84,3 +84,22 @@ def test_list_for_owner_projects_and_returns_summaries(repo):
     assert len(result) == 1
     assert isinstance(result[0], FileSummary)
     assert result[0].path == "/a.txt"
+
+
+def test_init_creates_the_unique_identity_index(repo):
+    _, col = repo
+    # (owner, path) is the file's identity: it's save()'s upsert filter and the
+    # filter get() and delete() query on. unique=True makes the database enforce
+    # what the upsert already assumes — one recipe per path per owner.
+    col.create_index.assert_called_once_with(
+        [("owner", 1), ("path", 1)], unique=True
+    )
+
+
+def test_the_identity_index_is_not_unique_on_owner_alone(repo):
+    """A unique index on `owner` would allow one file per user, and would fail to
+    build against any collection where someone owns two files."""
+    _, col = repo
+    keys, kwargs = col.create_index.call_args.args[0], col.create_index.call_args.kwargs
+    assert [k for k, _ in keys] == ["owner", "path"]
+    assert kwargs.get("unique") is True

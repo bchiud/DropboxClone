@@ -11,6 +11,7 @@ from app.ports.file_repository import FileRepository
 class MongoFileRepository(FileRepository):
     def __init__(self, collection: Collection):
         self._collection = collection
+        self._collection.create_index([("owner", 1), ("path", 1)], unique=True)
 
     def save(self, record: FileRecord) -> None:
         self._collection.replace_one(
