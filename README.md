@@ -102,7 +102,7 @@ one server reaches a device connected to any other. The bus is a port: Redis in
 production, in-process when `REDIS_URL` is unset.
 
 ```
-   commit/delete ─▶ Notifier.notify(user) ─▶ ChangeBus.publish(user)
+   any change ─▶ Notifier.notify(user) ─▶ ChangeBus.publish(user)
                                                     │  Redis pub/sub
                              ┌──────────────────────┴──────────────────────┐
                              ▼                                              ▼
@@ -568,11 +568,18 @@ via presigned URLs. It covers:
   revoke any of them, plus mint / copy / revoke public share-links.
 - **Public links** — a no-auth `/?token=…` page that resolves a share-link and
   downloads the file (hash-verified) with no account.
-- **Real-time** — both tabs hold a WebSocket (`/ws`). "Your files" refreshes when
-  the same account commits or deletes elsewhere; "Shared with you" refreshes when
-  someone grants, revokes, or deletes a file shared with you. A **commit** notifies
-  only the owner — a recipient's list shows grants, not file contents, so a new
-  version changes nothing they can see.
+- **Real-time** — both tabs hold a WebSocket (`/ws`), as does an open sharing panel.
+  "Your files" refreshes when the same account commits or deletes elsewhere;
+  "Shared with you" refreshes when someone grants, revokes, or deletes a file shared
+  with you; the sharing panel refreshes when you grant, revoke, or mint a link from
+  another device. A **commit** notifies only the owner — a recipient's list shows
+  grants, not file contents, so a new version changes nothing they can see.
+
+> **Caveat:** `connectChanges` does not reconnect. If the socket drops — sleep,
+> proxy idle-timeout, server redeploy — the view silently stops updating until
+> reload. Explicit refreshes after each action are what keep the UI correct; the
+> socket is an accelerator, not a dependency. SSE would give reconnect for free
+> (this traffic is one-way, so `EventSource` fits it better than a WebSocket does).
 
 > The download path — fetch each block, re-verify `sha256(block) == hash`,
 > reassemble — lives once in `frontend/src/lib/download.ts` (`assembleBlocks`), shared
@@ -778,8 +785,13 @@ volume grows.
 - **100% backend coverage**, plus frontend unit tests.
 
 **Next:**
-- Pull-side delta (reuse local blocks instead of re-downloading a changed file).
-- Content-defined chunking (so delta survives insertions).
+- Reconnect-with-backoff for the change socket (or switch to SSE, which has it
+  built in) — today a dropped socket stops live updates until reload.
+- Content-defined chunking (so delta survives insertions). Fixed 4 MiB offsets mean
+  a one-byte insertion at the front rewrites every block hash.
+- Pull-side delta (reuse local blocks instead of re-downloading a changed file) —
+  worth little until chunking is content-defined, since today an insert invalidates
+  every block anyway.
 - Streaming chunking for very large files (avoid reading whole file into memory).
 - Orphaned-block garbage collection — now unlocked, since delete is the first
   operation that creates real orphans. `scripts/audit_storage.py` is the cleanup

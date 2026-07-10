@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import AddLinkIcon from "@mui/icons-material/AddLink";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DeleteIcon from "@mui/icons-material/Delete";
+import PersonAddIcon from "@mui/icons-material/PersonAdd";
 import {
   Alert,
   Avatar,
@@ -15,11 +18,9 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AddLinkIcon from "@mui/icons-material/AddLink";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import DeleteIcon from "@mui/icons-material/Delete";
-import PersonAddIcon from "@mui/icons-material/PersonAdd";
+import { useEffect, useState } from "react";
 import {
+  connectChanges,
   createShareLink,
   listOutgoingShares,
   listShareLinks,
@@ -38,6 +39,7 @@ export function SharePanel({ path }: { path: string }) {
   const [grants, setGrants] = useState<Share[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState<string | null>(null);
+  const [busyChip, setBusyChip] = useState<string | null>(null);
 
   // --- data loading ---
   async function refreshLinks() {
@@ -53,6 +55,11 @@ export function SharePanel({ path }: { path: string }) {
   useEffect(() => {
     refreshLinks();
     refreshGrants();
+    const ws = connectChanges(() => {
+      refreshLinks();
+      refreshGrants();
+    });
+    return () => ws.close();
   }, [path]);
 
   // --- actions ---
@@ -68,12 +75,15 @@ export function SharePanel({ path }: { path: string }) {
   }
 
   async function revokeGrant(sharedWith: string) {
+    setBusyChip(sharedWith);
     try {
       await revokeUserShare(path, sharedWith);
       setStatus(`Stopped sharing with ${sharedWith}`);
       await refreshGrants();
     } catch {
       setStatus("Could not revoke");
+    } finally {
+      setBusyChip(null);
     }
   }
 
@@ -142,7 +152,11 @@ export function SharePanel({ path }: { path: string }) {
             No one yet
           </Typography>
         ) : (
-          <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", mt: 0.5 }}>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            sx={{ flexWrap: "wrap", mt: 0.5 }}
+          >
             {grants.map((g) => (
               <Tooltip
                 key={g.shared_with}
@@ -151,6 +165,7 @@ export function SharePanel({ path }: { path: string }) {
                 <Chip
                   size="small"
                   label={g.shared_with}
+                  disabled={busyChip === g.shared_with}
                   onDelete={() => revokeGrant(g.shared_with)}
                   avatar={
                     <Avatar sx={{ bgcolor: userColor(g.shared_with) }}>

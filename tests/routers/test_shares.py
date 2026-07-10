@@ -119,7 +119,7 @@ def test_shares_require_auth():
     assert resp.status_code == 401
 
 
-# --- realtime: only the recipient's view changes ---
+# --- realtime: every user whose view changed gets notified ---
 
 @pytest.fixture
 def notifier():
@@ -128,28 +128,35 @@ def notifier():
     yield n
 
 
-def test_granting_notifies_the_recipient_and_not_the_owner(service, notifier):
+def notified(notifier) -> set[str]:
+    """Who was notified, order-independent. Bare await counts would pass even if
+    the route notified the same user twice and the other not at all."""
+    return {call.args[0] for call in notifier.notify.await_args_list}
+
+
+def test_granting_notifies_the_recipient_and_the_owner(service, notifier):
+    # alice's "Shared with you" list gained a row; bob's SharePanel gained a chip
     resp = TestClient(app).post(
         "/shares", json={"path": "/x.txt", "shared_with": "alice"})
     assert resp.status_code == 200
-    # alice's "Shared with you" list gained a row; bob's file list did not change
-    notifier.notify.assert_awaited_once_with("alice")
+    assert notified(notifier) == {"alice", "bob"}
 
 
-def test_revoking_notifies_the_recipient_and_not_the_owner(service, notifier):
+def test_revoking_notifies_the_recipient_and_the_owner(service, notifier):
     resp = TestClient(app).request(
         "DELETE", "/shares", json={"path": "/x.txt", "shared_with": "alice"})
     assert resp.status_code == 204
-    notifier.notify.assert_awaited_once_with("alice")
+    assert notified(notifier) == {"alice", "bob"}
 
 
-def test_minting_a_public_link_notifies_nobody(service, notifier):
+def test_minting_a_public_link_notifies_only_the_owner(service, notifier):
+    # a link has no recipient — but the owner's link list just grew
     resp = TestClient(app).post("/shares/link", json={"path": "/x.txt"})
     assert resp.status_code == 200
-    notifier.notify.assert_not_awaited()  # a link has no user to notify
+    assert notified(notifier) == {"bob"}
 
 
-def test_revoking_a_public_link_notifies_nobody(service, notifier):
+def test_revoking_a_public_link_notifies_only_the_owner(service, notifier):
     resp = TestClient(app).delete("/shares/link/j1")
     assert resp.status_code == 204
-    notifier.notify.assert_not_awaited()
+    assert notified(notifier) == {"bob"}

@@ -25,6 +25,7 @@ async def create_share(
         owner=current_user, path=share_request.path, shared_with=share_request.shared_with,
     )
     await notifier.notify(share_request.shared_with)
+    await notifier.notify(current_user)
     return share
 
 
@@ -37,6 +38,7 @@ async def delete_share(
 ):
     share_service.revoke(owner=current_user, path=share_request.path, shared_with=share_request.shared_with)
     await notifier.notify(share_request.shared_with)
+    await notifier.notify(current_user)
 
 
 @router.get("/incoming", response_model=list[Share])
@@ -62,8 +64,10 @@ async def create_share_link(
         share_link_request: ShareLinkRequest,
         share_service: ShareService = Depends(get_share_service),
         current_user: str = Depends(get_current_user),
+        notifier: Notifier = Depends(get_notifier),
 ):
     token = share_service.create_link(owner=current_user, path=share_link_request.path)
+    await notifier.notify(current_user)
     return {"token": token}
 
 
@@ -72,8 +76,10 @@ async def revoke_share_link(
         jti: str,
         share_service: ShareService = Depends(get_share_service),
         current_user: str = Depends(get_current_user),
+        notifier: Notifier = Depends(get_notifier),
 ):
     share_service.revoke_link(owner=current_user, jti=jti)
+    await notifier.notify(current_user)
 
 
 @router.get("/link", response_model=list[ShareLink])
