@@ -13,7 +13,7 @@ def test_incomplete_implementation_is_rejected():
     class Incomplete(BlockStore):
         def has_block(self, h):
             return False
-        # missing put_block / get_block
+        # missing presigned_put_url / presigned_get_url
 
     with pytest.raises(TypeError):
         Incomplete()
@@ -24,12 +24,6 @@ def test_complete_implementation_instantiates():
         def has_block(self, h):
             return False
 
-        def put_block(self, h, d):
-            pass
-
-        def get_block(self, h):
-            return b""
-
         def presigned_put_url(self, h):
             return ""
 
@@ -37,3 +31,10 @@ def test_complete_implementation_instantiates():
             return ""
 
     assert isinstance(Complete(), BlockStore)
+
+
+def test_port_exposes_no_byte_moving_methods():
+    """Bytes go client -> B2 directly. A put_block/get_block on the port would be
+    an invitation to route them through the app server."""
+    assert not hasattr(BlockStore, "put_block")
+    assert not hasattr(BlockStore, "get_block")

@@ -17,15 +17,6 @@ class B2BlockStore(BlockStore):
                 return False
             raise
 
-    def put_block(self, block_hash: str, data: bytes) -> None:
-        if self.has_block(block_hash):
-            return
-        self._s3.put_object(Bucket=self._bucket, Key=block_hash, Body=data)
-
-    def get_block(self, block_hash: str) -> bytes:
-        response = self._s3.get_object(Bucket=self._bucket, Key=block_hash)
-        return response["Body"].read()
-
     def presigned_put_url(self, block_hash: str) -> str:
         return self._s3.generate_presigned_url(
             "put_object",

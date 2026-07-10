@@ -17,12 +17,6 @@ class FakeBlockStore(BlockStore):
     def has_block(self, h):
         return h in self.blocks
 
-    def put_block(self, h, d):
-        self.blocks[h] = d
-
-    def get_block(self, h):
-        return self.blocks[h]
-
     def presigned_put_url(self, h):
         return f"https://b2.test/put/{h}"
 
