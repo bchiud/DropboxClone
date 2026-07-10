@@ -57,8 +57,9 @@ Hexagonal (ports & adapters) with dependency injection. Dependencies point
 **inward**: the outer layers depend on the inner ones, never the reverse.
 
 ```
-   HTTP / WebSocket
+   client / browser
           │
+          │ HTTP / WebSocket — JSON only: hashes, recipes, presigned urls
           ▼
    ┌──────────────────┐
    │  routers/        │  presentation
@@ -73,8 +74,13 @@ Hexagonal (ports & adapters) with dependency injection. Dependencies point
    └────────▲─────────┘
             │ implemented by
    ┌────────┴─────────┐
-   │  adapters/       │  infrastructure  ·  B2 · Mongo · Redis
-   └──────────────────┘
+   │  adapters/       │  infrastructure  ·  Mongo · Redis · B2
+   └────────┬─────────┘
+            │ has_block / presign  (metadata — never the bytes)
+            ▼
+   ┌──────────────────────────────┐
+   │  B2   key = <owner>/<hash>   │ ◀╌╌╌╌ block bytes, presigned PUT / GET,
+   └──────────────────────────────┘        client → B2, bypassing every layer above
 
    composition root: dependencies.py wires adapters → services
    cross-cutting:    auth_dependencies.py (bearer → user) · realtime.py (Notifier + ConnectionManager)
@@ -205,21 +211,25 @@ Documents are schemaless in Mongo, so the schema lives in code as Pydantic model
 Adapters translate model ⇄ dict at the storage boundary (`.model_dump()` /
 `Model(**doc)`); raw dicts never leak past the adapter.
 
+A `├──` below means *inherits from*. The sharing models have no common base — each
+is a standalone `BaseModel`, so they're listed flat, request body under the thing
+it creates.
+
 ```
-FileMeta(owner, path, size, updated_at)
- ├── FileSummary               # listing view (no recipe)
- └── FileRecord(+ block_hashes)  # full stored document
+FileBase(owner, path, size, updated_at)
+ ├── FileSummary                                     # listing view (no recipe)
+ └── FileRecord(+ block_hashes)                      # full stored document
 
 UserBase(username)
- ├── User(+ password_hash, created_at)     # internal — never returned by a route
- ├── UserRegisterRequest(+ password)       # request body
- └── UserRegisterResponse(+ created_at)    # safe response (no hash)
+ ├── User(+ password_hash, created_at)               # internal — never returned by a route
+ ├── UserRegisterRequest(+ password)                 # request body
+ └── UserRegisterResponse(+ created_at)              # safe response (no hash)
 
-Share(owner, path, shared_with, created_at)   # one user-to-user grant (Mongo `shares`)
- ├── ShareRequest(path, shared_with)           # grant/revoke request body
- └── ShareLinkRequest(path)                     # mint-a-public-link request body
+Share(owner, path, shared_with, created_at)          # one user-to-user grant (Mongo `shares`)
+ShareRequest(path, shared_with)                      #   → its grant/revoke request body
 
 ShareLink(jti, owner, path, created_at, expires_at)  # one live public link (Mongo `share_links`)
+ShareLinkRequest(path)                               #   → its mint request body
 ```
 
 - **`FileSummary` vs `FileRecord`** — a deliberate read/write split: listings
@@ -410,7 +420,8 @@ both computed once in `create_link`, so the JWT and the DB can never disagree.
   `purge_for_file` **before** `delete_file`. Purge-first fails safe: with no
   cross-collection transaction, a crash between the writes leaves a live file with
   no grants (recoverable), never a dead path with live grants (which would reattach
-  on re-upload). Closing that window for good needs an immutable `file_id`.
+  on re-upload). `scripts/audit_storage.py --orphan-grants` reaps whatever the
+  window leaves; closing it for good needs an immutable `file_id`.
 
 ---
 
@@ -549,9 +560,11 @@ via presigned URLs. It covers:
   revoke any of them, plus mint / copy / revoke public share-links.
 - **Public links** — a no-auth `/?token=…` page that resolves a share-link and
   downloads the file (hash-verified) with no account.
-- **Real-time** — a WebSocket (`/ws`) refreshes *your* file list when the same
-  account commits elsewhere. "Shared with you" does **not** live-update — `commit`
-  notifies only the owner — so it refetches on tab switch.
+- **Real-time** — both tabs hold a WebSocket (`/ws`). "Your files" refreshes when
+  the same account commits or deletes elsewhere; "Shared with you" refreshes when
+  someone grants, revokes, or deletes a file shared with you. A **commit** notifies
+  only the owner — a recipient's list shows grants, not file contents, so a new
+  version changes nothing they can see.
 
 > The download path — fetch each block, re-verify `sha256(block) == hash`,
 > reassemble — lives once in `frontend/src/lib/download.ts` (`assembleBlocks`), shared
@@ -712,17 +725,21 @@ Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
 - **The app tier is nearly stateless already.** Auth is a stateless JWT and bytes
   bypass the app, so FastAPI instances scale horizontally behind a load balancer
   with autoscaling — and with the pub/sub bus shipped, that's now fully true.
-- **Mongo indexing & sharding.** Add compound indexes on the hot paths
-  (`files` by `(owner, path)`, `share_links` by `jti`); at very large scale,
-  **shard on `owner`** so a user's files and blocks colocate.
+- **Mongo indexing & sharding.** The sharing collections are indexed — `shares` on
+  `(owner, path, shared_with)` unique (whose leftmost prefix also serves the
+  `(owner, path)` purge) plus `shared_with` alone for the recipient's list;
+  `share_links` on `jti` unique and `(owner, path)`. Still missing: `files` by
+  `(owner, path)`. At very large scale, **shard on `owner`** so a user's files and
+  blocks colocate.
 - **CDN in front of B2.** Cache public-link downloads at the edge instead of
   re-fetching per request; presigned GETs work behind a CDN.
 - **Bounded metadata growth.** A **TTL index** on `share_links.expires_at` auto-reaps
   dead links (they're already inert, but they accumulate — see the sharing tradeoffs).
 - **Garbage collection that scales.** Now that file delete ships, orphaned blocks
-  are real. The one-shot full-scan audit (`scripts/audit_storage.py`) is fine at
-  this size but won't scale — the endgame is **per-block reference counting** or an
-  incremental mark-and-sweep, not a full bucket + collection scan.
+  are real. The one-shot full-scan audit (`scripts/audit_storage.py` — phantom
+  files, orphaned blocks, orphaned grants) is fine at this size but won't scale —
+  the endgame is **per-block reference counting** or an incremental mark-and-sweep,
+  not a full bucket + collection scan.
 
 The highest-leverage step — the **Redis pub/sub bus** behind `ConnectionManager`,
 which unlocks running more than one server at all — is **done**. With the app tier
@@ -735,43 +752,31 @@ volume grows.
 ## Status & roadmap
 
 **Done:**
-- **Core storage** — content-addressed storage, chunking/dedup, REST API,
-  JWT auth, full ports/adapters architecture.
-- **Sync client** — folder watcher + push/pull.
-- **Delta sync** — client-side chunking + have/need negotiation + presigned
-  direct-to-B2 transfer + per-user block scoping + re-verify-on-read.
-- **Real-time sync** — WebSocket push: commit notifies the owner's devices,
-  which pull instantly instead of polling.
-- **Sharing & permissions** — read-only user-to-user grants + public share-links
-  with **expiry and revocation** (an `exp` claim plus a `jti` allowlist in
-  Mongo), all gated by an authorization layer that never touches storage.
-- **Web UI** — React + Vite: auth, tabbed "Your files" / "Shared with you", upload,
-  hash-verified download, delete, sharing (grant to a user, list and revoke a file's
-  recipients, mint/copy/revoke public links), and a no-auth public download page.
-- **File deletion** — `DELETE /files`, owner-scoped from the token; removes the
-  recipe and leaves blocks for GC. Cascades to sharing: `purge_for_file` drops the
-  file's grants and links **before** the recipe is deleted, so nothing dangles.
-- **Refresh tokens** — short-lived access + long-lived refresh with a Mongo
-  `jti` allowlist and TTL auto-reap; `/auth/refresh` mints new access tokens,
-  `/auth/logout` revokes; `typ`-guarded so access/refresh/share tokens can't be
-  swapped; web session survives reload and auto-refreshes on a 401.
-- **Horizontal-scale realtime** — a `ChangeBus` port behind the WebSocket layer:
-  `notify` publishes to Redis pub/sub and every server fans out to its own local
-  sockets, so a commit on one server reaches a device connected to another
-  (verified with a live two-process test; falls back to an in-process bus when
-  `REDIS_URL` is unset).
-- **Data-integrity constraint** — unique index on `username`.
-- **100% test coverage.**
+- **Core storage** — content-addressed blocks, chunking/dedup, REST API, JWT auth,
+  ports & adapters throughout.
+- **Delta sync** — client-side chunking, have/need negotiation, presigned
+  direct-to-B2 transfer, per-user block scoping, re-verify-on-read.
+- **Sync client** — folder watcher, push/pull, WebSocket-driven pull.
+- **Real-time** — `ChangeBus` over Redis pub/sub, so a commit on one server reaches
+  a device on another. Each route notifies exactly the users whose view changed.
+- **Sharing** — user-to-user grants and public share-links, both revocable, links
+  also expiring. Authorization never touches storage.
+- **File deletion** — owner-scoped, cascades to grants and links before the recipe.
+- **Refresh tokens** — `jti` allowlist with TTL reap; `typ`-guarded against
+  cross-use; the web session survives reload and auto-refreshes on a 401.
+- **Web UI** — React + Vite: tabbed "Your files" / "Shared with you", upload,
+  hash-verified download, delete, full sharing, no-auth public download page.
+- **Indexes** — unique on `username`, `jti`, and the grant triple.
+- **100% backend coverage**, plus frontend unit tests.
 
 **Next:**
-- Notify a grant's recipients on commit, so "Shared with you" live-updates like
-  "Your files" does. `commit` currently notifies only the owner.
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file).
 - Content-defined chunking (so delta survives insertions).
 - Streaming chunking for very large files (avoid reading whole file into memory).
 - Orphaned-block garbage collection — now unlocked, since delete is the first
-  operation that creates real orphans; `scripts/audit_storage.py` is the cleanup
-  path, and a scheduled mark-and-sweep GC finally has a use case.
+  operation that creates real orphans. `scripts/audit_storage.py` is the cleanup
+  path (it already reaps orphaned grants too); a scheduled mark-and-sweep GC
+  finally has a use case.
 
 **Hardening backlog:**
 - Shorten the presigned-URL TTL (`ExpiresIn=3600` in `B2BlockStore`) so revoking a
