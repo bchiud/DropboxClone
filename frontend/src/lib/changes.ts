@@ -35,7 +35,10 @@ export function connectChanges(onChange: () => void): () => void {
     ws.onclose = () => {
       if (disposed) return; // our own close(), not a drop
       const backoff = Math.min(RETRY_BASE_MS * 2 ** retry++, RETRY_CAP_MS);
-      timer = window.setTimeout(open, backoff + Math.random() * RETRY_JITTER_MS);
+      timer = window.setTimeout(
+        open,
+        backoff + Math.random() * RETRY_JITTER_MS,
+      );
     };
   }
 

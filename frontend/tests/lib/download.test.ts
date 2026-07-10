@@ -74,9 +74,9 @@ describe("assembleBlocks", () => {
   it("rejects a failed block fetch", async () => {
     stubFetch({ "u-a": "x" }, false, 403);
 
-    await expect(
-      assembleBlocks([HASH.x], { [HASH.x]: "u-a" }),
-    ).rejects.toThrow(`block GET ${HASH.x} → 403`);
+    await expect(assembleBlocks([HASH.x], { [HASH.x]: "u-a" })).rejects.toThrow(
+      `block GET ${HASH.x} → 403`,
+    );
   });
 
   it("stops at the first bad block instead of downloading the rest", async () => {

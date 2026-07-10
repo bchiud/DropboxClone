@@ -306,4 +306,3 @@ export async function linkDownloadUrls(
   const data = (await res.json()) as { urls: Record<string, string> };
   return data.urls;
 }
-

@@ -71,9 +71,7 @@ describe("connecting", () => {
   it("opens a socket immediately, over ws:// with the token in the query", () => {
     connectChanges(() => {});
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeWebSocket.last.url).toBe(
-      "ws://localhost:5173/ws?token=tok-1",
-    );
+    expect(FakeWebSocket.last.url).toBe("ws://localhost:5173/ws?token=tok-1");
   });
 
   it("invokes onChange for a `changed` frame and ignores anything else", () => {
