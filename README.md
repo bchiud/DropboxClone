@@ -119,14 +119,14 @@ The traffic is one-way and single-event: the server pushes `{"type":"changed"}`,
 the client refetches. Nothing ever flows client→server on that socket. That is
 **exactly** Server-Sent Events' shape, so the two were weighed:
 
-| | WebSocket (chosen)                                        | SSE (`EventSource`) |
-|---|-----------------------------------------------------------|---|
-| **Fits one-way traffic** | over-spec'd — bidirectional + binary framing unused       | purpose-built |
-| **Reconnect on drop** | hand-rolled (exponential backoff, jitter, disposal guard) | free, built into the browser |
-| **Missed-event replay** | none — reconnect refetches instead                        | `Last-Event-ID`, if the server retains events |
-| **Auth** | no custom headers → token in query string                 | *same* — `EventSource` can't set headers either |
-| **Server (FastAPI)** | first-class: `@app.websocket`, `WebSocketDisconnect`      | `StreamingResponse` + manual `text/event-stream` framing + `is_disconnected()` polling |
-| **Connections per origin** | not subject to the HTTP/1.1 limit                         | consumes one of ~6 (moot here: ≤2 streams, and block transfers hit B2's origin) |
+|                            | WebSocket (chosen)                                        | SSE (`EventSource`)                                                                    |
+|----------------------------|-----------------------------------------------------------|----------------------------------------------------------------------------------------|
+| **Fits one-way traffic**   | over-spec'd — bidirectional + binary framing unused       | purpose-built                                                                          |
+| **Reconnect on drop**      | hand-rolled (exponential backoff, jitter, disposal guard) | free, built into the browser                                                           |
+| **Missed-event replay**    | none — reconnect refetches instead                        | `Last-Event-ID`, if the server retains events                                          |
+| **Auth**                   | no custom headers → token in query string                 | *same* — `EventSource` can't set headers either                                        |
+| **Server (FastAPI)**       | first-class: `@app.websocket`, `WebSocketDisconnect`      | `StreamingResponse` + manual `text/event-stream` framing + `is_disconnected()` polling |
+| **Connections per origin** | not subject to the HTTP/1.1 limit                         | consumes one of ~6 (moot here: ≤2 streams, and block transfers hit B2's origin)        |
 
 - **Reconnect had to be hand-rolled** — `EventSource` ships with it. The strongest
   argument that SSE was the better fit.
@@ -140,13 +140,13 @@ written and tested.
 
 ### Layers
 
-| Layer | Directory | Knows about | Example |
-|-------|-----------|-------------|---------|
-| Presentation | `app/routers/` | HTTP, FastAPI | `files.py`, `auth.py`, `shares.py`, `link.py` |
-| Application | `app/application/` | ports, domain | `FileService`, `AuthService`, `ShareService` |
-| Domain | `app/domain/`, `app/models/` | nothing external | `security`, Pydantic models |
-| Ports | `app/ports/` | — (abstract) | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository`, `RefreshTokenRepository`, `ChangeBus` |
-| Adapters | `app/adapters/` | B2, Mongo, Redis | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository`, `MongoRefreshTokenRepository`, `RedisChangeBus`, `InMemoryChangeBus` |
+| Layer        | Directory                    | Knows about      | Example                                                                                                                                                         |
+|--------------|------------------------------|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Presentation | `app/routers/`               | HTTP, FastAPI    | `files.py`, `auth.py`, `shares.py`, `link.py`                                                                                                                   |
+| Application  | `app/application/`           | ports, domain    | `FileService`, `AuthService`, `ShareService`                                                                                                                    |
+| Domain       | `app/domain/`, `app/models/` | nothing external | `security`, Pydantic models                                                                                                                                     |
+| Ports        | `app/ports/`                 | — (abstract)     | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository`, `RefreshTokenRepository`, `ChangeBus`                               |
+| Adapters     | `app/adapters/`              | B2, Mongo, Redis | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository`, `MongoRefreshTokenRepository`, `RedisChangeBus`, `InMemoryChangeBus` |
 
 ---
 
@@ -306,21 +306,21 @@ All `/files` and `/blocks` routes require `Authorization: Bearer <token>`.
 
 **Auth**
 
-| Method | Path | Body | Returns |
-|--------|------|------|---------|
+| Method | Path             | Body                        | Returns                        |
+|--------|------------------|-----------------------------|--------------------------------|
 | `POST` | `/auth/register` | JSON `{username, password}` | `201` `{username, created_at}` |
-| `POST` | `/auth/login` | form `username, password` | `{access_token, token_type}` |
+| `POST` | `/auth/login`    | form `username, password`   | `{access_token, token_type}`   |
 
 **Delta flow** (used by the sync client — file bytes go directly to/from B2)
 
-| Method | Path | Body | Returns |
-|--------|------|------|---------|
-| `POST` | `/blocks/missing` | `{hashes: [...]}` | `{missing: [...]}` — which blocks the server needs |
-| `POST` | `/blocks/upload-urls` | `{hashes: [...]}` | `{urls: {hash: presigned PUT url}}` |
-| `POST` | `/blocks/download-urls?owner=&path=` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}` |
-| `POST` | `/files/commit` | `{path, size, block_hashes}` | `201` `{path, size, blocks}` · `409` if blocks missing |
-| `GET`  | `/files/recipe?path=…&owner=…` | — | `{path, size, block_hashes}` |
-| `GET`  | `/files` | — | `{files: [FileSummary]}` |
+| Method | Path                                 | Body                         | Returns                                                |
+|--------|--------------------------------------|------------------------------|--------------------------------------------------------|
+| `POST` | `/blocks/missing`                    | `{hashes: [...]}`            | `{missing: [...]}` — which blocks the server needs     |
+| `POST` | `/blocks/upload-urls`                | `{hashes: [...]}`            | `{urls: {hash: presigned PUT url}}`                    |
+| `POST` | `/blocks/download-urls?owner=&path=` | `{hashes: [...]}`            | `{urls: {hash: presigned GET url}}`                    |
+| `POST` | `/files/commit`                      | `{path, size, block_hashes}` | `201` `{path, size, blocks}` · `409` if blocks missing |
+| `GET`  | `/files/recipe?path=…&owner=…`       | —                            | `{path, size, block_hashes}`                           |
+| `GET`  | `/files`                             | —                            | `{files: [FileSummary]}`                               |
 
 On reads, `owner` is **optional** and defaults to the caller. Passing another
 user's `owner` reads a file **shared with you** — the server gates it on a grant
@@ -328,22 +328,22 @@ and returns `404` (never `403`) if you have none.
 
 **Sharing** (read-only grants; `owner` is always the caller's token identity)
 
-| Method | Path | Body | Returns |
-|--------|------|------|---------|
-| `POST`   | `/shares` | `{path, shared_with}` | the `Share` — grant read on *your* file to a user |
-| `DELETE` | `/shares` | `{path, shared_with}` | `204` — revoke a grant |
-| `GET`    | `/shares/incoming` | — | `[Share]` — files shared **with me** |
-| `GET`    | `/shares/outgoing` | — | `[Share]` — grants **I've made** |
-| `POST`   | `/shares/link` | `{path}` | `{token}` — mint a public share-link token for *your* file |
-| `DELETE` | `/shares/link/{jti}` | — | `204` — revoke a link by its `jti` (owner-scoped) |
-| `GET`    | `/shares/link` | — | `[ShareLink]` — links **I've minted** that are still live |
+| Method   | Path                 | Body                  | Returns                                                    |
+|----------|----------------------|-----------------------|------------------------------------------------------------|
+| `POST`   | `/shares`            | `{path, shared_with}` | the `Share` — grant read on *your* file to a user          |
+| `DELETE` | `/shares`            | `{path, shared_with}` | `204` — revoke a grant                                     |
+| `GET`    | `/shares/incoming`   | —                     | `[Share]` — files shared **with me**                       |
+| `GET`    | `/shares/outgoing`   | —                     | `[Share]` — grants **I've made**                           |
+| `POST`   | `/shares/link`       | `{path}`              | `{token}` — mint a public share-link token for *your* file |
+| `DELETE` | `/shares/link/{jti}` | —                     | `204` — revoke a link by its `jti` (owner-scoped)          |
+| `GET`    | `/shares/link`       | —                     | `[ShareLink]` — links **I've minted** that are still live  |
 
 **Public links** (no auth — the signed token *is* the identity)
 
-| Method | Path | Body | Returns |
-|--------|------|------|---------|
-| `GET`  | `/link/recipe?token=…` | — | `{path, size, block_hashes}` — `404` on a bad/forged/**revoked/expired** token |
-| `POST` | `/link/download-urls?token=…` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}` |
+| Method | Path                          | Body              | Returns                                                                        |
+|--------|-------------------------------|-------------------|--------------------------------------------------------------------------------|
+| `GET`  | `/link/recipe?token=…`        | —                 | `{path, size, block_hashes}` — `404` on a bad/forged/**revoked/expired** token |
+| `POST` | `/link/download-urls?token=…` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}`                                            |
 
 Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 
@@ -389,15 +389,15 @@ per-user block scoping does the rest — a recipient reads the owner's
 `<owner>/<hash>` blocks but can never write into them, so "read-only" falls out
 as *less code* (there is no `can_write`).
 
-| | User-to-user | Public link |
-|---|---|---|
-| **Identity** | JWT auth token → `current_user` | signed share token → `(owner, path, jti)` |
-| **Grant store** | Mongo `shares` collection | Mongo `share_links` — one row per **live** link, keyed on `jti` |
+|                 | User-to-user                                                      | Public link                                                                                                          |
+|-----------------|-------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| **Identity**    | JWT auth token → `current_user`                                   | signed share token → `(owner, path, jti)`                                                                            |
+| **Grant store** | Mongo `shares` collection                                         | Mongo `share_links` — one row per **live** link, keyed on `jti`                                                      |
 | **Authz check** | `ShareService.can_read` (you are the owner **or** a grant exists) | `ShareService.resolve_link` (valid signature, `typ == "share"`, **not expired**, **and its `jti` row still exists**) |
-| **Mint** | `POST /shares` | `POST /shares/link` |
-| **Read** | `GET /files/recipe?owner=`, `POST /blocks/download-urls?owner=` | `GET /link/recipe`, `POST /link/download-urls` (no login) |
-| **Revoke** | `DELETE /shares` | `DELETE /shares/link/{jti}` (deletes the row) |
-| **Expiry** | — (grants are durable) | `exp` claim, default 7 days (`SHARE_LINK_EXPIRE_MINUTES`) |
+| **Mint**        | `POST /shares`                                                    | `POST /shares/link`                                                                                                  |
+| **Read**        | `GET /files/recipe?owner=`, `POST /blocks/download-urls?owner=`   | `GET /link/recipe`, `POST /link/download-urls` (no login)                                                            |
+| **Revoke**      | `DELETE /shares`                                                  | `DELETE /shares/link/{jti}` (deletes the row)                                                                        |
+| **Expiry**      | — (grants are durable)                                            | `exp` claim, default 7 days (`SHARE_LINK_EXPIRE_MINUTES`)                                                            |
 
 **Security invariants:**
 
@@ -412,15 +412,15 @@ as *less code* (there is no `can_write`).
   `?token=…` may read exactly one `(owner, path)`, read-only, with no account.
 - **Links expire and are revocable.** Two independent kill-switches, both checked
   on every read by `resolve_link`:
-  - **Expiry** is free and offline — the `exp` claim is set once at mint (default
-    7 days, `SHARE_LINK_EXPIRE_MINUTES`) and enforced by JWT decode, so an expired
-    token fails signature-check before any DB lookup.
-  - **Revocation** is an *allowlist*: minting writes a `share_links` row keyed on
-    the token's `jti`, and a read only resolves while that row exists. `DELETE
+    - **Expiry** is free and offline — the `exp` claim is set once at mint (default
+      7 days, `SHARE_LINK_EXPIRE_MINUTES`) and enforced by JWT decode, so an expired
+      token fails signature-check before any DB lookup.
+    - **Revocation** is an *allowlist*: minting writes a `share_links` row keyed on
+      the token's `jti`, and a read only resolves while that row exists. `DELETE
     /shares/link/{jti}` deletes it — killing the link even though the signed token
-    itself is still cryptographically valid. The same row powers `GET /shares/link`
-    (list your live links). Revoke is **owner-scoped** (`{owner, jti}` filter), so
-    no one can revoke a link they didn't mint.
+      itself is still cryptographically valid. The same row powers `GET /shares/link`
+      (list your live links). Revoke is **owner-scoped** (`{owner, jti}` filter), so
+      no one can revoke a link they didn't mint.
 
 **Revocation stops future reads, not bytes already in flight.**
 
@@ -521,7 +521,7 @@ REDIS_URL                         # optional; set to enable multi-server realtim
 ### 1. Setup (once)
 
 ```bash
-uv venv --python /opt/homebrew/bin/python3.12
+uv venv DropboxClone --python /opt/homebrew/bin/python3.12
 source .venv/bin/activate
 uv pip install -r requirements.txt
 cp .env.example .env            # then fill in real values (see Configuration)
@@ -570,12 +570,12 @@ python -m client --server http://127.0.0.1:8000 \
     --username alice --password secret123 --folder ~/DropboxClone --once
 ```
 
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--server` | `http://127.0.0.1:8000` | server base URL |
-| `--username` / `--password` | *(required)* | account to log in as (must already exist) |
-| `--folder` | *(required)* | local folder to sync |
-| `--once` | off | sync once and exit (no watching) |
+| Flag                        | Default                 | Meaning                                   |
+|-----------------------------|-------------------------|-------------------------------------------|
+| `--server`                  | `http://127.0.0.1:8000` | server base URL                           |
+| `--username` / `--password` | *(required)*            | account to log in as (must already exist) |
+| `--folder`                  | *(required)*            | local folder to sync                      |
+| `--once`                    | off                     | sync once and exit (no watching)          |
 
 ### 4. Launch the web UI (optional)
 
@@ -628,11 +628,11 @@ routes (`/auth`, `/files`, `/blocks`, `/shares`, `/link`, `/ws`) to
 > CORS rule allowing your dev origin (`http://localhost:5173`) for `GET`, `PUT`,
 > and `HEAD`. Add your production origin to that rule when you deploy.
 
-| Script | What it does |
-|--------|--------------|
-| `npm run dev` | dev server with hot-reload on `:5173` |
-| `npm run build` | type-check (`tsc`) then bundle to `frontend/dist/` |
-| `npm run preview` | serve the production build locally |
+| Script            | What it does                                       |
+|-------------------|----------------------------------------------------|
+| `npm run dev`     | dev server with hot-reload on `:5173`              |
+| `npm run build`   | type-check (`tsc`) then bundle to `frontend/dist/` |
+| `npm run preview` | serve the production build locally                 |
 
 ## Demo: the whole system via `curl`
 
@@ -793,6 +793,7 @@ volume grows.
 ## Status & roadmap
 
 **Done:**
+
 - **Core storage** — content-addressed blocks, chunking/dedup, REST API, JWT auth,
   ports & adapters throughout.
 - **Delta sync** — client-side chunking, have/need negotiation, presigned
@@ -814,6 +815,7 @@ volume grows.
 - **100% backend coverage**, plus frontend unit tests.
 
 **Next:**
+
 - Content-defined chunking (so delta survives insertions). Fixed 4 MiB offsets mean
   a one-byte insertion at the front rewrites every block hash.
 - Pull-side delta (reuse local blocks instead of re-downloading a changed file) —
@@ -826,6 +828,7 @@ volume grows.
   finally has a use case.
 
 **Hardening backlog:**
+
 - File versioning (conflict copies).
 - Refresh-token rotation (currently non-rotating).
 - httpOnly-cookie token storage (currently `localStorage`).

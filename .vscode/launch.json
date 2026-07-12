@@ -1,12 +1,29 @@
-  {
-    "version": "0.2.0",
-    "configurations": [
-      {
-        "type": "chrome",
-        "request": "launch",
-        "name": "Debug frontend",
-        "url": "http://localhost:5173",
-        "webRoot": "${workspaceFolder}/frontend"
-      }
-    ]
-  }
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: FastAPI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--port", "8000"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Debug frontend",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend",
+      "preLaunchTask": "frontend: dev server"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full stack (backend + frontend)",
+      "configurations": ["Backend: FastAPI", "Debug frontend"],
+      "stopAll": true
+    }
+  ]
+}
