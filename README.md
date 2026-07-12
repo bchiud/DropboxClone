@@ -521,9 +521,9 @@ REDIS_URL                         # optional; set to enable multi-server realtim
 ### 1. Setup (once)
 
 ```bash
-python3.12 -m venv .venv
+uv venv --python /opt/homebrew/bin/python3.12
 source .venv/bin/activate
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 cp .env.example .env            # then fill in real values (see Configuration)
 ```
 
