@@ -185,7 +185,8 @@ export function FileList() {
                       spacing={1}
                       sx={{ alignItems: "center" }}
                     >
-                      {/* minWidth:0 lets this flex item shrink below its content, which is what allows the name to ellipsize */}
+                      {/* minWidth:0 lets flex item shrink below its content;
+                      ellipsize (middle truncate) text to fit within column */}
                       <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                         <Tooltip title={displayPath(f.path)} enterDelay={400}>
                           <Typography noWrap>

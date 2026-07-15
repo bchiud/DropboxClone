@@ -23,7 +23,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
     try {
       if (mode === "register") await register(username, password);
       await login(username, password); // register doesn't return a token, so log in after
-      onLoggedIn(); // tell App we're in
+      onLoggedIn(); // tell app we're in
     } catch (e) {
       if (e instanceof ApiError) {
         setError(

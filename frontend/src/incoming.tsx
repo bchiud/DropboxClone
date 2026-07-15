@@ -113,8 +113,7 @@ export function SharedWithMe() {
         variant="outlined"
         sx={{ borderRadius: 2 }}
       >
-        {/* fixed layout: columns keep their width so a long name ellipsizes
-            instead of shoving the other columns off the row */}
+        {/* fixed layout as long as "name" ellipsizes, otherwise other columns are pushed off the row */}
         <Table size="small" sx={{ tableLayout: "fixed" }}>
           <TableHead>
             <TableRow sx={{ bgcolor: "action.hover" }}>
