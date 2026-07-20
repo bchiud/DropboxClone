@@ -133,6 +133,13 @@ the client refetches. Nothing ever flows client→server on that socket. That is
 - **Replay isn't wanted anyway.** `Last-Event-ID` needs retained events (Redis
   **Streams**, not pub/sub). Refetching on reconnect reconciles against current
   state — strictly stronger, and the payload is empty regardless.
+- **Why the server side is simpler.** The traffic is one-way (SSE's shape), but the
+  *plumbing* — upgrade, framing, liveness, teardown — is what FastAPI automates for
+  WebSockets and leaves manual for SSE. The handler is ~20 lines of logic
+  (`accept`, then `await receive_text()` whose only job is to raise
+  `WebSocketDisconnect` on drop, then `finally` teardown); the SSE equivalent is
+  that plus a hand-rolled `text/event-stream` generator with its own
+  `is_disconnected()` polling.
 
 **Verdict:** close call, and SSE is the better-matched primitive. WebSockets stay
 because the server side is genuinely simpler in FastAPI and the reconnect is now
