@@ -7,6 +7,7 @@ import pytest
 from app.application.file_service import BlockNotInFile, FileService, MissingBlocks
 from app.domain.recipe import recipe_etag
 from app.models.file import FileRecord, FileSummary
+from app.ports.block_index import BlockIndex
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository, VersionConflict
 
@@ -14,8 +15,10 @@ from app.ports.file_repository import FileRepository, VersionConflict
 class FakeBlockStore(BlockStore):
     def __init__(self):
         self.blocks: dict[str, bytes] = {}
+        self.head_calls: list[str] = []  # every has_block(key) — to pin "HEADs only new"
 
     def has_block(self, h):
+        self.head_calls.append(h)
         return h in self.blocks
 
     def presigned_put_url(self, h):
@@ -55,17 +58,37 @@ class FakeFileRepository(FileRepository):
         ]
 
 
+class FakeBlockIndex(BlockIndex):
+    """In-memory owner -> {hashes known present in B2}. The invariant the real
+    adapter upholds (index ⊆ B2) is the test's responsibility to respect."""
+
+    def __init__(self):
+        self._present: dict[str, set[str]] = {}
+
+    def present_subset(self, owner, hashes):
+        known = self._present.get(owner, set())
+        return {h for h in hashes if h in known}
+
+    def add_many(self, owner, hashes):
+        self._present.setdefault(owner, set()).update(hashes)
+
+
 @pytest.fixture
 def service():
     store = FakeBlockStore()
     repo = FakeFileRepository()
-    return FileService(store, repo), store, repo
+    index = FakeBlockIndex()
+    return FileService(store, repo, index), store, repo  # index reachable via svc._block_index
 
 
-def test_missing_blocks_returns_only_absent(service):
+def test_missing_blocks_reads_the_index_not_b2(service):
+    # a block in B2 but not yet indexed is still reported missing — proving the
+    # negotiation path queries the index, not B2 (and it's the safe over-report).
     svc, store, _ = service
-    store.blocks[FileService._block_key("u", "have")] = b"x"
-    assert svc.missing_blocks("u", ["have", "gone"]) == ["gone"]
+    store.blocks[FileService._block_key("u", "inb2")] = b"x"   # in B2, not committed/indexed
+    svc._block_index.add_many("u", ["indexed"])
+    assert svc.missing_blocks("u", ["indexed", "inb2"]) == ["inb2"]
+    assert store.head_calls == []   # negotiation issues zero B2 HEADs
 
 
 def test_upload_urls_are_put_urls_namespaced(service):
@@ -118,6 +141,31 @@ def test_commit_file_raises_when_blocks_missing(service):
     with pytest.raises(MissingBlocks) as exc:
         svc.commit_file("u", "/a.txt", 5, ["nope"], expected_etag=None)
     assert exc.value.hashes == ["nope"]
+
+
+def test_commit_indexes_new_blocks_after_verifying_them_in_b2(service):
+    svc, store, _ = service
+    store.blocks[FileService._block_key("u", "h1")] = b"x"   # uploaded to B2, not yet indexed
+    svc.commit_file("u", "/a.txt", 5, ["h1"], expected_etag=None)
+    assert svc._block_index.present_subset("u", ["h1"]) == {"h1"}   # now recorded
+
+
+def test_commit_heads_only_unindexed_blocks(service):
+    # already-indexed blocks were verified at their own commit -> trusted, not re-HEADed
+    svc, store, _ = service
+    svc._block_index.add_many("u", ["old"])                  # from a prior commit
+    store.blocks[FileService._block_key("u", "new")] = b"x"
+    svc.commit_file("u", "/a.txt", 5, ["old", "new"], expected_etag=None)
+    assert store.head_calls == [FileService._block_key("u", "new")]  # "old" never touched B2
+
+
+def test_commit_rejects_and_does_not_index_a_new_block_absent_from_b2(service):
+    # the over-report guard: a hash neither indexed nor in B2 must 409, not slip into the index
+    svc, _, _ = service
+    with pytest.raises(MissingBlocks) as exc:
+        svc.commit_file("u", "/a.txt", 5, ["ghost"], expected_etag=None)
+    assert exc.value.hashes == ["ghost"]
+    assert svc._block_index.present_subset("u", ["ghost"]) == set()  # not indexed on failure
 
 
 def test_get_recipe_returns_full_record(service):

@@ -2,6 +2,7 @@ import datetime
 
 from app.domain.recipe import recipe_etag
 from app.models.file import FileRecord, FileSummary
+from app.ports.block_index import BlockIndex
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
 
@@ -21,18 +22,17 @@ class FileService:
     def _block_key(owner: str, block_hash: str) -> str:
         return f"{owner}/{block_hash}"
 
-    def __init__(self, block_store: BlockStore, file_repository: FileRepository) -> None:
+    def __init__(self, block_store: BlockStore, file_repository: FileRepository, block_index: BlockIndex) -> None:
         self._block_store = block_store
         self._file_repository = file_repository
+        self._block_index = block_index
 
     def list_files(self, owner: str) -> list[FileSummary]:
         return self._file_repository.list_for_owner(owner)
 
     def missing_blocks(self, owner: str, hashes: list[str]) -> list[str]:
-        return [
-            h for h in hashes
-            if not self._block_store.has_block(self._block_key(owner, h))
-        ]
+        present = self._block_index.present_subset(owner, hashes)
+        return [h for h in hashes if h not in present]
 
     def upload_urls(self, owner: str, hashes: list[str]) -> dict[str, str]:
         return {
@@ -52,9 +52,13 @@ class FileService:
 
     def commit_file(self, owner: str, path: str, size: int, block_hashes: list[str],
                     expected_etag: str | None) -> FileRecord:
-        missing = self.missing_blocks(owner, block_hashes)
-        if missing:
-            raise MissingBlocks(missing)
+        present = self._block_index.present_subset(owner, block_hashes)
+        new = [h for h in block_hashes if h not in present]
+        absent = [h for h in new if not self._block_store.has_block(self._block_key(owner, h))]
+        if absent:
+            raise MissingBlocks(absent)
+        if new:
+            self._block_index.add_many(owner, new)
 
         fileRecord = FileRecord(
             owner=owner,

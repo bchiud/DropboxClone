@@ -152,8 +152,8 @@ written and tested.
 | Presentation | `app/routers/`               | HTTP, FastAPI    | `files.py`, `auth.py`, `shares.py`, `link.py`                                                                                                                   |
 | Application  | `app/application/`           | ports, domain    | `FileService`, `AuthService`, `ShareService`                                                                                                                    |
 | Domain       | `app/domain/`, `app/models/` | nothing external | `security`, Pydantic models                                                                                                                                     |
-| Ports        | `app/ports/`                 | — (abstract)     | `BlockStore`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository`, `RefreshTokenRepository`, `ChangeBus`                               |
-| Adapters     | `app/adapters/`              | B2, Mongo, Redis | `B2BlockStore`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository`, `MongoRefreshTokenRepository`, `RedisChangeBus`, `InMemoryChangeBus` |
+| Ports        | `app/ports/`                 | — (abstract)     | `BlockStore`, `BlockIndex`, `FileRepository`, `UserRepository`, `ShareRepository`, `ShareLinkRepository`, `RefreshTokenRepository`, `ChangeBus`                 |
+| Adapters     | `app/adapters/`              | B2, Mongo, Redis | `B2BlockStore`, `MongoBlockIndex`, `MongoFileRepository`, `MongoShareRepository`, `MongoShareLinkRepository`, `MongoRefreshTokenRepository`, `RedisChangeBus`, `InMemoryChangeBus` |
 
 ---
 
@@ -190,6 +190,7 @@ app/
 │
 ├── ports/                  # abstract interfaces (ABCs)
 │   ├── block_store.py              #   BlockStore
+│   ├── block_index.py              #   BlockIndex (which blocks an owner has, in Mongo)
 │   ├── file_repository.py          #   FileRepository
 │   ├── user_repository.py          #   UserRepository
 │   ├── share_repository.py         #   ShareRepository
@@ -199,6 +200,7 @@ app/
 │
 └── adapters/               # concrete implementations
     ├── b2_block_store.py                 # BlockStore             → Backblaze B2 (boto3)
+    ├── mongo_block_index.py              # BlockIndex             → MongoDB (owner,hash)
     ├── mongo_file_repository.py          # FileRepository         → MongoDB
     ├── mongo_user_repository.py          # UserRepository         → MongoDB
     ├── mongo_share_repository.py         # ShareRepository        → MongoDB
@@ -381,13 +383,24 @@ Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 
 ```
 1. client: blocks = chunker.split(data)            # hashes computed client-side
-2. POST /blocks/missing {hashes}      → server: has_block(owner/h)? → missing[]
+2. POST /blocks/missing {hashes}      → server: BlockIndex.present_subset(owner) → missing[]   (one query)
 3. POST /blocks/upload-urls {missing} → server: presigned PUT url per owner/hash
 4. client → PUT block bytes → B2 directly           (only the missing blocks)
 5. POST /files/commit {path,size,hashes} + If-Match/If-None-Match
-                                          → server verifies all present, CAS on etag,
-                                            saves FileRecord, returns new ETag (412 on a stale precondition)
+                                          → server HEADs only the not-yet-indexed blocks in B2,
+                                            indexes them, CAS on etag, saves FileRecord, returns new
+                                            ETag (409 if a new block is absent, 412 on a stale precondition)
 ```
+
+**The block index — a Mongo cache of "which blocks an owner has."** Negotiation
+(`/blocks/missing`) is a single indexed query, not one B2 `HEAD` per hash — a 12k-block
+file was 12k serial round-trips. The index is a strict **subset of B2**: a block is
+recorded only *after* `commit` confirms it's really in B2 (bytes go client→B2 directly,
+so the server can't trust the upload landed). That direction is the safety property —
+the index can only ever *over*-report "missing" (→ a harmless idempotent re-upload),
+never claim a block is present when it isn't (→ a committable-but-unreadable file). So
+`commit` `HEAD`s only genuinely-new blocks (paid once, per distinct block), and the hot
+negotiation path touches Mongo alone.
 
 ### Request flow — delta download
 
@@ -817,8 +830,9 @@ Here the bottlenecks move to the app tier, Mongo, and the real-time layer:
   `(owner, path)` unique; `shares` on `(owner, path, shared_with)` unique (whose
   leftmost prefix also serves the `(owner, path)` purge) plus `shared_with` alone
   for the recipient's list; `share_links` on `jti` unique, `(owner, path)`, and a
-  TTL on `expires_at`. At very large scale, **shard on `owner`** so a user's files
-  and blocks colocate.
+  TTL on `expires_at`; `blocks` on `(owner, hash)` unique (the block index — a single
+  `$in` lookup answers negotiation, replacing one B2 `HEAD` per hash). At very large
+  scale, **shard on `owner`** so a user's files and blocks colocate.
 - **CDN in front of B2.** Cache public-link downloads at the edge instead of
   re-fetching per request; presigned GETs work behind a CDN.
 - **Garbage collection that scales.** Now that file delete ships, orphaned blocks
@@ -855,12 +869,15 @@ volume grows.
   is an `If-Match`/`If-None-Match` conditional write (single-doc CAS), so concurrent
   writers get `412` instead of silently clobbering. Both clients send the precondition
   and reconcile on conflict; identical re-commits fold into a no-op.
+- **Block index** — a Mongo `(owner, hash)` collection (`BlockIndex` port) makes
+  `/blocks/missing` a single `$in` query instead of one B2 `HEAD` per hash; `commit`
+  verifies only not-yet-indexed blocks in B2, keeping the index a strict subset of B2.
 - **Refresh tokens** — `jti` allowlist with TTL reap; `typ`-guarded against
   cross-use; the web session survives reload and auto-refreshes on a 401.
 - **Web UI** — React + Vite: tabbed "Your files" / "Shared with you", upload,
   hash-verified download, delete, full sharing, no-auth public download page.
-- **Indexes** — unique on `username`, `jti`, `(owner, path)`, and the grant triple;
-  TTL reap on expiring `refresh_tokens` and `share_links`.
+- **Indexes** — unique on `username`, `jti`, `(owner, path)`, the grant triple, and
+  `(owner, hash)` (block index); TTL reap on expiring `refresh_tokens` and `share_links`.
 - **100% backend coverage**, plus frontend unit tests.
 
 **Next:**
