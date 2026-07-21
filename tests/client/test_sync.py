@@ -24,7 +24,7 @@ class FakeApi:
     def upload_urls(self, hashes):
         return {h: f"fake://{h}" for h in hashes}
 
-    def download_urls(self, hashes):
+    def download_urls(self, path, hashes):
         return {h: f"fake://{h}" for h in hashes}
 
     def put_block(self, url, data):

@@ -28,10 +28,13 @@ def test_upload_urls_unwraps_urls():
     assert make_client(handler).upload_urls(["h1"]) == {"h1": "https://b2/put/h1"}
 
 
-def test_download_urls_unwraps_urls():
+def test_download_urls_sends_path_as_query_and_unwraps_urls():
     def handler(req):
+        # path rides in the query string (server reads it there); only hashes in the body
+        assert req.url.params.get("path") == "/a.txt"
+        assert json.loads(req.content) == {"hashes": ["h1"]}
         return httpx.Response(200, json={"urls": {"h1": "https://b2/get/h1"}})
-    assert make_client(handler).download_urls(["h1"]) == {"h1": "https://b2/get/h1"}
+    assert make_client(handler).download_urls("/a.txt", ["h1"]) == {"h1": "https://b2/get/h1"}
 
 
 def test_commit_file_posts_recipe_body():

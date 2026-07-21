@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.application.file_service import BlockNotInFile
 from app.dependencies import get_file_service, get_share_service
 from app.main import app
 from app.models.file import FileRecord
@@ -27,7 +28,11 @@ class FakeFileService:
                               block_hashes=["h1", "h2"], updated_at=datetime.now(UTC))
         raise FileNotFoundError(path)
 
-    def download_urls(self, owner, hashes):
+    def download_urls(self, owner, path, hashes):
+        recipe = self.get_recipe(owner, path).block_hashes  # FileNotFoundError for a gone file
+        extra = [h for h in hashes if h not in recipe]
+        if extra:
+            raise BlockNotInFile(extra)
         return {h: f"https://b2/get/{owner}/{h}" for h in hashes}
 
 
@@ -77,4 +82,17 @@ def test_download_urls_with_unresolvable_token_returns_404(client):
 def test_link_to_missing_file_returns_404(client):
     # token resolves, but the file behind it is gone
     resp = client.get("/link/recipe", params={"token": MISSING_FILE_TOKEN})
+    assert resp.status_code == 404
+
+
+def test_download_urls_via_link_rejects_hash_not_in_recipe(client):
+    # a valid link to /known.txt can't be used to fetch blocks outside its recipe
+    resp = client.post("/link/download-urls",
+                       params={"token": GOOD_TOKEN}, json={"hashes": ["h1", "sneaky"]})
+    assert resp.status_code == 404
+
+
+def test_download_urls_via_link_to_missing_file_returns_404(client):
+    resp = client.post("/link/download-urls",
+                       params={"token": MISSING_FILE_TOKEN}, json={"hashes": ["h1"]})
     assert resp.status_code == 404

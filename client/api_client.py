@@ -66,9 +66,10 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()["urls"]
 
-    def download_urls(self, hashes: list[str]) -> dict[str, str]:
+    def download_urls(self, path: str, hashes: list[str]) -> dict[str, str]:
         resp = self._http.post(
             "/blocks/download-urls",
+            params={"path": path},
             json={"hashes": hashes},
             headers=self._auth(),
         )

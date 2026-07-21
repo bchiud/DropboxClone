@@ -4,7 +4,7 @@ Both ports are replaced with in-memory fakes, so these run with zero B2 / Mongo.
 """
 import pytest
 
-from app.application.file_service import FileService, MissingBlocks
+from app.application.file_service import BlockNotInFile, FileService, MissingBlocks
 from app.models.file import FileRecord, FileSummary
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
@@ -64,8 +64,28 @@ def test_upload_urls_are_put_urls_namespaced(service):
 
 
 def test_download_urls_are_get_urls_namespaced(service):
+    svc, store, _ = service
+    store.blocks[FileService._block_key("u", "h1")] = b"x"
+    svc.commit_file("u", "/a.txt", 5, ["h1"])
+    assert svc.download_urls("u", "/a.txt", ["h1"]) == {"h1": "https://b2.test/get/u/h1"}
+
+
+def test_download_urls_rejects_hashes_not_in_the_recipe(service):
+    # a hash the caller isn't authorized for (not part of this file) is refused,
+    # even in the owner's own namespace — the recipe is the capability boundary.
+    svc, store, _ = service
+    store.blocks[FileService._block_key("u", "h1")] = b"x"
+    svc.commit_file("u", "/a.txt", 5, ["h1"])
+    with pytest.raises(BlockNotInFile) as exc:
+        svc.download_urls("u", "/a.txt", ["h1", "other"])
+    assert exc.value.hashes == ["other"]
+
+
+def test_download_urls_raises_when_file_missing(service):
+    # dangling grant / deleted-but-linked path: authz passed upstream, no recipe here
     svc, _, _ = service
-    assert svc.download_urls("u", ["h1"]) == {"h1": "https://b2.test/get/u/h1"}
+    with pytest.raises(FileNotFoundError):
+        svc.download_urls("u", "/nope.txt", ["h1"])
 
 
 def test_block_keys_are_namespaced_per_owner(service):

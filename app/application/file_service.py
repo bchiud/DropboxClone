@@ -5,6 +5,11 @@ from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
 
 
+class BlockNotInFile(Exception):
+    def __init__(self, hashes: list[str]):
+        self.hashes = hashes
+
+
 class MissingBlocks(Exception):
     def __init__(self, hashes: list[str]):
         self.hashes = hashes
@@ -34,7 +39,11 @@ class FileService:
             for h in hashes
         }
 
-    def download_urls(self, owner: str, hashes: list[str]) -> dict[str, str]:
+    def download_urls(self, owner: str, path: str, hashes: list[str]) -> dict[str, str]:
+        recipe: FileRecord = self.get_recipe(owner, path)
+        extra_hashes: list[str] = [h for h in hashes if h not in set(recipe.block_hashes)]
+        if extra_hashes:
+            raise BlockNotInFile(extra_hashes)
         return {
             h: self._block_store.presigned_get_url(self._block_key(owner, h))
             for h in hashes

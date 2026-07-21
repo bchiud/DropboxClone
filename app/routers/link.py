@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.application.file_service import FileService
+from app.application.file_service import BlockNotInFile, FileService
 from app.application.share_service import ShareService
 from app.dependencies import get_file_service, get_share_service
 from app.models.file import BlockHashesRequest, FileRecord
@@ -40,5 +40,9 @@ def link_download_urls(
         file_service: FileService = Depends(get_file_service),
         share_service: ShareService = Depends(get_share_service),
 ) -> dict:
-    owner, _path = _resolve_share_token(token, share_service)
-    return {"urls": file_service.download_urls(owner=owner, hashes=body.hashes)}
+    owner, path = _resolve_share_token(token, share_service)
+    try:
+        hashes_to_urls: dict[str, str] = file_service.download_urls(owner=owner, path=path, hashes=body.hashes)
+    except (BlockNotInFile, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"urls": hashes_to_urls}

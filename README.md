@@ -324,14 +324,18 @@ All `/files` and `/blocks` routes require `Authorization: Bearer <token>`.
 |--------|--------------------------------------|------------------------------|--------------------------------------------------------|
 | `POST` | `/blocks/missing`                    | `{hashes: [...]}`            | `{missing: [...]}` — which blocks the server needs     |
 | `POST` | `/blocks/upload-urls`                | `{hashes: [...]}`            | `{urls: {hash: presigned PUT url}}`                    |
-| `POST` | `/blocks/download-urls?owner=&path=` | `{hashes: [...]}`            | `{urls: {hash: presigned GET url}}`                    |
+| `POST` | `/blocks/download-urls?path=…&owner=` | `{hashes: [...]}`           | `{urls: {hash: presigned GET url}}` · `404` for a hash outside the file's recipe |
 | `POST` | `/files/commit`                      | `{path, size, block_hashes}` | `201` `{path, size, blocks}` · `409` if blocks missing |
 | `GET`  | `/files/recipe?path=…&owner=…`       | —                            | `{path, size, block_hashes}`                           |
 | `GET`  | `/files`                             | —                            | `{files: [FileSummary]}`                               |
 
 On reads, `owner` is **optional** and defaults to the caller. Passing another
 user's `owner` reads a file **shared with you** — the server gates it on a grant
-and returns `404` (never `403`) if you have none.
+and returns `404` (never `403`) if you have none. `path` is **required**:
+`download-urls` presigns only hashes that belong to that file's recipe, so a
+read authorized for one `(owner, path)` can't be used to pull other blocks in the
+owner's namespace. A requested hash outside the recipe returns `404` — same
+opaque answer as any other denial.
 
 **Sharing** (read-only grants; `owner` is always the caller's token identity)
 
@@ -350,7 +354,7 @@ and returns `404` (never `403`) if you have none.
 | Method | Path                          | Body              | Returns                                                                        |
 |--------|-------------------------------|-------------------|--------------------------------------------------------------------------------|
 | `GET`  | `/link/recipe?token=…`        | —                 | `{path, size, block_hashes}` — `404` on a bad/forged/**revoked/expired** token |
-| `POST` | `/link/download-urls?token=…` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}`                                            |
+| `POST` | `/link/download-urls?token=…` | `{hashes: [...]}` | `{urls: {hash: presigned GET url}}` — `404` for a hash outside the linked file's recipe |
 
 Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 
@@ -412,6 +416,12 @@ as *less code* (there is no `can_write`).
   only share or link files you actually own.
 - **`404`, never `403`, on denial** — refusing access never reveals that the
   file exists.
+- **A read is scoped to one file's blocks, not the owner's whole namespace.**
+  `can_read` / `resolve_link` authorize a `(owner, path)`, and `download-urls`
+  presigns only hashes that appear in *that* file's recipe. Authz is on the path;
+  the block hash alone is never a bearer capability — a grant on one file can't be
+  turned into GET URLs for unrelated blocks in the owner's namespace. Out-of-recipe
+  hashes get the same opaque `404`.
 - **Auth and share tokens are non-interchangeable.** Both are HS256-signed with
   the same `JWT_SECRET`, so a `typ: "share"` claim (checked on decode) stops an
   auth token from being redeemed as a link, or vice-versa.

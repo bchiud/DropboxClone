@@ -90,7 +90,7 @@ class SyncEngine:
 
             # (re-)downloads whole file
             # in ideal case, implement content-defined chunking, and pull delta blocks only
-            data = self._download_blocks(hashes)
+            data = self._download_blocks(server_path, hashes)
             local.parent.mkdir(parents=True, exist_ok=True)
             local.write_bytes(data)
             self._index.update(server_path, data)
@@ -98,8 +98,8 @@ class SyncEngine:
         self._index.save()
         return pulled
 
-    def _download_blocks(self, hashes: list[str]) -> bytes:
-        urls = self._api.download_urls(hashes)
+    def _download_blocks(self, path: str, hashes: list[str]) -> bytes:
+        urls = self._api.download_urls(path, hashes)
         parts: list[bytes] = []
         for h in hashes:
             block = self._api.get_block(urls[h])  # <- from B2 directly

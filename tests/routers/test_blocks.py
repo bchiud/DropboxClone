@@ -6,6 +6,7 @@ is pinned to "alice" to verify owner-namespacing flows through to the service.
 import pytest
 from fastapi.testclient import TestClient
 
+from app.application.file_service import BlockNotInFile
 from app.auth_dependencies import get_current_user
 from app.dependencies import get_file_service, get_share_service
 from app.main import app
@@ -18,7 +19,14 @@ class FakeService:
     def upload_urls(self, owner, hashes):
         return {h: f"https://b2/put/{owner}/{h}" for h in hashes}
 
-    def download_urls(self, owner, hashes):
+    def download_urls(self, owner, path, hashes):
+        # models the real service: the recipe is the capability boundary
+        if path == "/missing.txt":
+            raise FileNotFoundError(path)  # dangling grant / deleted file
+        recipe = {"h1", "h2"}
+        extra = [h for h in hashes if h not in recipe]
+        if extra:
+            raise BlockNotInFile(extra)
         return {h: f"https://b2/get/{owner}/{h}" for h in hashes}
 
 
@@ -50,7 +58,8 @@ def test_upload_urls_wrapped_and_owner_namespaced(client):
 
 
 def test_download_urls_wrapped_and_owner_namespaced(client):
-    resp = client.post("/blocks/download-urls", json={"hashes": ["h1"]})
+    resp = client.post(
+        "/blocks/download-urls", params={"path": "/x.txt"}, json={"hashes": ["h1"]})
     assert resp.json() == {"urls": {"h1": "https://b2/get/alice/h1"}}
 
 
@@ -66,6 +75,27 @@ def test_download_urls_without_grant_returns_404(client):
     app.dependency_overrides[get_share_service] = lambda: FakeShareService(allow=False)
     resp = client.post(
         "/blocks/download-urls", params={"owner": "bob", "path": "/x.txt"},
+        json={"hashes": ["h1"]})
+    assert resp.status_code == 404
+
+
+def test_download_urls_missing_path_returns_422(client):
+    # path is a required query param — omitting it fails validation, not authz
+    resp = client.post("/blocks/download-urls", json={"hashes": ["h1"]})
+    assert resp.status_code == 422
+
+
+def test_download_urls_hash_not_in_recipe_returns_404(client):
+    # a hash outside this file's recipe is refused even in the caller's own namespace
+    resp = client.post(
+        "/blocks/download-urls", params={"path": "/x.txt"},
+        json={"hashes": ["h1", "sneaky"]})
+    assert resp.status_code == 404
+
+
+def test_download_urls_for_missing_file_returns_404(client):
+    resp = client.post(
+        "/blocks/download-urls", params={"path": "/missing.txt"},
         json={"hashes": ["h1"]})
     assert resp.status_code == 404
 
