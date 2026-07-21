@@ -6,7 +6,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
-      "args": ["app.main:app", "--port", "8000"],
+      "args": ["app.main:app", "--port", "8000", "--log-config", "log_config.yaml"],
       "cwd": "${workspaceFolder}",
       "justMyCode": true
     },

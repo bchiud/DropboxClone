@@ -4,7 +4,7 @@
     {
       "label": "backend: dev server",
       "type": "shell",
-      "command": "${workspaceFolder}/.venv/bin/uvicorn app.main:app --reload --port 8000",
+      "command": "${workspaceFolder}/.venv/bin/uvicorn app.main:app --reload --port 8000 --log-config log_config.yaml",
       "isBackground": true,
       "problemMatcher": {
         "pattern": { "regexp": "^$" },

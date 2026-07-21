@@ -587,7 +587,7 @@ cp .env.example .env            # then fill in real values (see Configuration)
 ### 2. Launch the server
 
 ```bash
-uvicorn app.main:app --reload   # serves on http://127.0.0.1:8000
+uvicorn app.main:app --reload --log-config log_config.yaml   # serves on http://127.0.0.1:8000
 ```
 
 > **Multi-server (optional):** realtime works out of the box on one server via an
@@ -899,8 +899,23 @@ volume grows.
   resolution is still last-writer-wins — the richer step is writing the loser's
   version alongside the winner's instead of retrying over it). File versioning
   (keeping prior recipes) is the natural extension.
-- Refresh-token rotation (currently non-rotating).
-- httpOnly-cookie token storage (currently `localStorage`).
+- **Auth hardening.** Deferred as operational/feature security, not architecture —
+  the auth *model* (stateless JWT + bcrypt + a `jti`-allowlisted refresh token) is in
+  place; these are policy knobs layered on top:
+    - **Access-token revocation** — the access JWT is stateless, so logout kills only
+      the refresh `jti`; a stolen access token stays valid to its `exp` (60 min). The
+      fix trades a little statelessness for a check — a short-TTL denylist of revoked
+      `jti`s (Redis), or shrinking the access-token lifetime toward the refresh cadence.
+    - **Refresh-token rotation** — refresh tokens are non-rotating, so a stolen one is
+      reusable for its whole 7-day life with no theft signal. Rotation mints a fresh
+      `jti` per refresh and retires the old; a *reused* retired `jti` flags a compromise.
+    - **httpOnly-cookie storage** — the web client keeps tokens in `localStorage`
+      (XSS-readable); `httpOnly` cookies remove that surface, at the cost of adding CSRF
+      defenses.
+    - **Login rate-limiting** — `/auth/login` has no throttle or lockout; bcrypt slows a
+      single guess but nothing caps attempt *volume* (credential stuffing). The fix is a
+      per-IP / per-account limiter — a Redis token bucket (the pub/sub Redis is already
+      wired) plus optional backoff/lockout.
 - **Resource limits & quotas.** There's no cap on what a client can ask for or
   store — deliberately deferred as abuse-hardening / product policy, not core
   architecture (the data plane already scales; bytes bypass the app server). Three
