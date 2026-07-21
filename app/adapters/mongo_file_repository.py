@@ -1,11 +1,12 @@
 from typing import Any, Mapping
 
 from pymongo.collection import Collection
+from pymongo.errors import DuplicateKeyError
 from pymongo.results import DeleteResult
 from pymongo.synchronous.cursor import Cursor
 
 from app.models.file import FileRecord, FileSummary
-from app.ports.file_repository import FileRepository
+from app.ports.file_repository import FileRepository, VersionConflict
 
 
 class MongoFileRepository(FileRepository):
@@ -13,12 +14,29 @@ class MongoFileRepository(FileRepository):
         self._collection = collection
         self._collection.create_index([("owner", 1), ("path", 1)], unique=True)
 
-    def save(self, record: FileRecord) -> None:
-        self._collection.replace_one(
-            filter={"owner": record.owner, "path": record.path},
+    def save(self, record: FileRecord, expected_etag: str | None) -> None:
+        if expected_etag is None:  # new file
+            try:
+                self._collection.insert_one(record.model_dump())
+            except DuplicateKeyError:
+                existing = self._collection.find_one({"owner": record.owner, "path": record.path})
+                if existing is None or existing["etag"] != record.etag:
+                    raise VersionConflict
+            return
+        result = self._collection.replace_one(
+            filter={
+                "owner": record.owner,
+                "path": record.path,
+                "etag": {"$in": [
+                    expected_etag,  # not updated yet
+                    record.etag,  # already updated. this call may be a retry or parallel update from another client
+                ]}
+            },
             replacement=record.model_dump(),
-            upsert=True,
-        )  # upsert for now. will do versioning later
+            upsert=False,
+        )
+        if result.matched_count == 0:
+            raise VersionConflict
 
     def get(self, owner: str, path: str) -> FileRecord | None:
         doc: Mapping[str, Any] | None | Any = self._collection.find_one(filter={"owner": owner, "path": path})

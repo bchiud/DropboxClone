@@ -250,8 +250,8 @@ it creates.
 
 ```
 FileBase(owner, path, size, updated_at)
- ├── FileSummary                                     # listing view (no recipe)
- └── FileRecord(+ block_hashes)                      # full stored document
+ ├── FileSummary(+ etag)                             # listing view (no recipe)
+ └── FileRecord(+ block_hashes, etag)                # full stored document
 
 UserBase(username)
  ├── User(+ password_hash, created_at)               # internal — never returned by a route
@@ -266,7 +266,8 @@ ShareLinkRequest(path)                               #   → its mint request bo
 ```
 
 - **`FileSummary` vs `FileRecord`** — a deliberate read/write split: listings
-  project away the (potentially huge) `block_hashes` array.
+  project away the (potentially huge) `block_hashes` array but keep the `etag`, so a
+  client can commit an update straight off the list without a recipe round-trip.
 - **`Share`** — keyed on the `(owner, path, shared_with)` triple, one document
   per grant.
 - **`ShareLink`** — keyed on `jti` (the token's unique id). Its *existence* is
@@ -325,9 +326,9 @@ All `/files` and `/blocks` routes require `Authorization: Bearer <token>`.
 | `POST` | `/blocks/missing`                    | `{hashes: [...]}`            | `{missing: [...]}` — which blocks the server needs     |
 | `POST` | `/blocks/upload-urls`                | `{hashes: [...]}`            | `{urls: {hash: presigned PUT url}}`                    |
 | `POST` | `/blocks/download-urls?path=…&owner=` | `{hashes: [...]}`           | `{urls: {hash: presigned GET url}}` · `404` for a hash outside the file's recipe |
-| `POST` | `/files/commit`                      | `{path, size, block_hashes}` | `201` `{path, size, blocks}` · `409` if blocks missing |
-| `GET`  | `/files/recipe?path=…&owner=…`       | —                            | `{path, size, block_hashes}`                           |
-| `GET`  | `/files`                             | —                            | `{files: [FileSummary]}`                               |
+| `POST` | `/files/commit`                      | `{path, size, block_hashes}` | `201`/`200` `{path, size, blocks}` + `ETag` · `409` blocks missing · `412` stale precondition · `428` no precondition |
+| `GET`  | `/files/recipe?path=…&owner=…`       | —                            | `{path, size, block_hashes}` + `ETag` header          |
+| `GET`  | `/files`                             | —                            | `{files: [FileSummary]}` (each carries its `etag`)    |
 
 On reads, `owner` is **optional** and defaults to the caller. Passing another
 user's `owner` reads a file **shared with you** — the server gates it on a grant
@@ -336,6 +337,24 @@ and returns `404` (never `403`) if you have none. `path` is **required**:
 read authorized for one `(owner, path)` can't be used to pull other blocks in the
 owner's namespace. A requested hash outside the recipe returns `404` — same
 opaque answer as any other denial.
+
+**Concurrent writes — optimistic concurrency on `commit`.** Every file carries an
+`etag = sha256(ordered block_hashes)`, returned as an HTTP `ETag` on `recipe`,
+`commit`, and each `/files` summary. `commit` is a **conditional write** keyed on
+the etag the client last read:
+
+- **`If-Match: "<etag>"`** — update this file *only if* it's still at that etag.
+  A racing writer that moved it on gets **`412 Precondition Failed`**.
+- **`If-None-Match: *`** — create only if the path is free; **`412`** if taken.
+- **neither** — **`428 Precondition Required`**; the client must declare intent.
+- A create returns **`201`**, an update **`200`**; both echo the new `ETag`.
+
+The write is a single-document compare-and-swap in Mongo (`replace_one` filtered on
+the etag), so it's atomic with no transaction. Re-committing identical content — a
+retry or two clients making the *same* edit — folds into a no-op rather than a
+false conflict. On a real `412` the client refetches, reconciles, and retries; the
+policy differs by client (headless sync auto-retries last-writer-wins, the browser
+prompts the user).
 
 **Sharing** (read-only grants; `owner` is always the caller's token identity)
 
@@ -365,7 +384,9 @@ Interactive docs at `/docs` (Swagger UI, with the **Authorize** button).
 2. POST /blocks/missing {hashes}      → server: has_block(owner/h)? → missing[]
 3. POST /blocks/upload-urls {missing} → server: presigned PUT url per owner/hash
 4. client → PUT block bytes → B2 directly           (only the missing blocks)
-5. POST /files/commit {path,size,hashes} → server verifies all present, saves FileRecord
+5. POST /files/commit {path,size,hashes} + If-Match/If-None-Match
+                                          → server verifies all present, CAS on etag,
+                                            saves FileRecord, returns new ETag (412 on a stale precondition)
 ```
 
 ### Request flow — delta download
@@ -488,9 +509,13 @@ server "changed" ──▶ ws_listener ──▶ SyncEngine.pull()   /files/reci
 
 - **`chunker`** splits files into hash-addressed blocks (its own copy of the 4 MiB
   scheme — the block hash is the shared contract with the server).
-- **`LocalIndex`** remembers each file's last-synced content hash (persisted **outside**
-  the synced folder), so `push` skips unchanged files without touching the network.
-- **`push`** uploads only the blocks the server reports `missing`, then commits the recipe.
+- **`LocalIndex`** remembers, per file, its last-synced content hash **and the
+  server's etag** (persisted **outside** the synced folder), so `push` skips
+  unchanged files without touching the network and knows the base etag for its next
+  commit.
+- **`push`** uploads only the blocks the server reports `missing`, then commits the
+  recipe with `If-Match: <stored etag>` (or `If-None-Match: *` for a new file). On a
+  `412`, `_reconcile` refetches the current etag and retries once — last-writer-wins.
 - **`pull`** downloads a differing file's blocks from B2, **re-verifies** each
   (`sha256(block) == hash`) before reassembling — so a corrupt/poisoned block can
   never silently corrupt a file.
@@ -504,7 +529,9 @@ server "changed" ──▶ ws_listener ──▶ SyncEngine.pull()   /files/reci
 - **No pull-side delta** — pull re-downloads a differing file's blocks in full,
   with no local block reuse. (It *does* skip files whose local blocks already
   match the recipe.)
-- **Last-writer-wins** — no conflict copies.
+- **Last-writer-wins on conflict** — concurrent commits are now *detected* (the
+  server's etag CAS returns `412`, so a blind overwrite is no longer possible), but
+  they're *resolved* by having the loser retry and win. No conflict copies yet.
 
 ---
 
@@ -685,9 +712,10 @@ PUT=$(curl -s -X POST $BASE/blocks/upload-urls -H "Authorization: Bearer $BOB" \
      -H 'Content-Type: application/json' -d "{\"hashes\":[\"$HASH\"]}" \
      | jq -r ".urls[\"$HASH\"]")
 curl -s -X PUT "$PUT" --data-binary @/tmp/demo.txt
-#   c) commit the recipe
+#   c) commit the recipe — If-None-Match: * says "create; fail if it exists"
+#      (an update would send If-Match: "<etag>" from a prior recipe/list read)
 curl -s -X POST $BASE/files/commit -H "Authorization: Bearer $BOB" \
-     -H 'Content-Type: application/json' \
+     -H 'Content-Type: application/json' -H 'If-None-Match: *' \
      -d "{\"path\":\"/demo.txt\",\"size\":$SIZE,\"block_hashes\":[\"$HASH\"]}"
 
 # 4. Bob shares /demo.txt with Alice
@@ -823,6 +851,10 @@ volume grows.
   also expiring. Authorization never touches storage. Revocation closes the read
   window in 5 minutes (`s3_url_ttl_seconds`), bounded below by download speed.
 - **File deletion** — owner-scoped, cascades to grants and links before the recipe.
+- **Optimistic concurrency** — every file carries an `etag = sha256(recipe)`; `commit`
+  is an `If-Match`/`If-None-Match` conditional write (single-doc CAS), so concurrent
+  writers get `412` instead of silently clobbering. Both clients send the precondition
+  and reconcile on conflict; identical re-commits fold into a no-op.
 - **Refresh tokens** — `jti` allowlist with TTL reap; `typ`-guarded against
   cross-use; the web session survives reload and auto-refreshes on a 401.
 - **Web UI** — React + Vite: tabbed "Your files" / "Shared with you", upload,
@@ -846,7 +878,10 @@ volume grows.
 
 **Hardening backlog:**
 
-- File versioning (conflict copies).
+- Conflict copies (concurrent writes are now *detected* via the etag CAS → `412`;
+  resolution is still last-writer-wins — the richer step is writing the loser's
+  version alongside the winner's instead of retrying over it). File versioning
+  (keeping prior recipes) is the natural extension.
 - Refresh-token rotation (currently non-rotating).
 - httpOnly-cookie token storage (currently `localStorage`).
 - **Resource limits & quotas.** There's no cap on what a client can ask for or

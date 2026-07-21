@@ -13,11 +13,12 @@ class FileBase(BaseModel):
 
 
 class FileSummary(FileBase):
-    pass
+    etag: str
 
 
 class FileRecord(FileBase):
     block_hashes: list[str]
+    etag: str
 
 
 class BlockHashesRequest(BaseModel):

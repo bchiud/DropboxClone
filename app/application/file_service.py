@@ -1,5 +1,6 @@
 import datetime
 
+from app.domain.recipe import recipe_etag
 from app.models.file import FileRecord, FileSummary
 from app.ports.block_store import BlockStore
 from app.ports.file_repository import FileRepository
@@ -49,7 +50,8 @@ class FileService:
             for h in hashes
         }
 
-    def commit_file(self, owner: str, path: str, size: int, block_hashes: list[str]) -> FileRecord:
+    def commit_file(self, owner: str, path: str, size: int, block_hashes: list[str],
+                    expected_etag: str | None) -> FileRecord:
         missing = self.missing_blocks(owner, block_hashes)
         if missing:
             raise MissingBlocks(missing)
@@ -60,8 +62,9 @@ class FileService:
             size=size,
             block_hashes=block_hashes,
             updated_at=datetime.datetime.now(datetime.UTC),
+            etag=recipe_etag(block_hashes),
         )
-        self._file_repository.save(fileRecord)
+        self._file_repository.save(fileRecord, expected_etag)
         return fileRecord
 
     def delete_file(self, owner: str, path: str) -> None:

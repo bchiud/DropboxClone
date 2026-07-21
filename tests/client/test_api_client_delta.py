@@ -2,6 +2,7 @@
 import json
 
 import httpx
+import pytest
 
 from client.api_client import ApiClient
 
@@ -37,20 +38,41 @@ def test_download_urls_sends_path_as_query_and_unwraps_urls():
     assert make_client(handler).download_urls("/a.txt", ["h1"]) == {"h1": "https://b2/get/h1"}
 
 
-def test_commit_file_posts_recipe_body():
+def test_commit_file_creates_with_if_none_match_and_returns_new_etag():
     def handler(req):
         assert req.url.path == "/files/commit"
         assert json.loads(req.content) == {"path": "/a.txt", "size": 5, "block_hashes": ["h1"]}
-        return httpx.Response(201, json={"path": "/a.txt", "size": 5, "blocks": 1})
-    assert make_client(handler).commit_file("/a.txt", 5, ["h1"])["blocks"] == 1
+        assert req.headers["If-None-Match"] == "*"          # base_etag None -> create
+        assert "If-Match" not in req.headers
+        return httpx.Response(201, headers={"ETag": '"new-etag"'})
+    assert make_client(handler).commit_file("/a.txt", 5, ["h1"], base_etag=None) == "new-etag"
 
 
-def test_get_recipe_uses_query_param():
+def test_commit_file_updates_with_if_match_header():
+    def handler(req):
+        assert req.headers["If-Match"] == '"base-etag"'     # base etag -> conditional update
+        assert "If-None-Match" not in req.headers
+        return httpx.Response(200, headers={"ETag": '"new-etag"'})
+    assert make_client(handler).commit_file("/a.txt", 5, ["h1"], base_etag="base-etag") == "new-etag"
+
+
+def test_commit_file_raises_precondition_failed_on_412():
+    from client.api_client import PreconditionFailed
+    def handler(req):
+        return httpx.Response(412)
+    with pytest.raises(PreconditionFailed):
+        make_client(handler).commit_file("/a.txt", 5, ["h1"], base_etag="stale")
+
+
+def test_get_recipe_returns_body_and_etag_from_header():
     def handler(req):
         assert req.url.path == "/files/recipe"
         assert req.url.params["path"] == "/a.txt"
-        return httpx.Response(200, json={"path": "/a.txt", "size": 5, "block_hashes": ["h1"]})
-    assert make_client(handler).get_recipe("/a.txt")["block_hashes"] == ["h1"]
+        return httpx.Response(200, headers={"ETag": '"the-etag"'},
+                              json={"path": "/a.txt", "size": 5, "block_hashes": ["h1"]})
+    recipe, etag = make_client(handler).get_recipe("/a.txt")
+    assert recipe["block_hashes"] == ["h1"]
+    assert etag == "the-etag"
 
 
 def test_put_block_sends_bytes_without_auth_header():

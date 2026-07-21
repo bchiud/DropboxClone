@@ -2,8 +2,14 @@
 import pytest
 
 from client import chunker
+from client.api_client import PreconditionFailed
 from client.state import LocalIndex
 from client.sync import CorruptBlock, SyncEngine
+
+
+def _etag(block_hashes):
+    # a deterministic token per content, standing in for the server's recipe etag
+    return "etag:" + ",".join(block_hashes)
 
 
 class FakeApi:
@@ -16,7 +22,8 @@ class FakeApi:
 
     def __init__(self):
         self.blocks: dict[str, bytes] = {}                  # hash -> bytes (the "B2 store")
-        self.recipes: dict[str, dict] = {}                  # path -> recipe
+        self.recipes: dict[str, dict] = {}                  # path -> recipe (incl. "etag")
+        self.commits: list[tuple] = []                      # (path, base_etag) — precondition spy
 
     def missing_blocks(self, hashes):
         return [h for h in hashes if h not in self.blocks]
@@ -33,18 +40,29 @@ class FakeApi:
     def get_block(self, url):
         return self.blocks[url.removeprefix("fake://")]
 
-    def commit_file(self, path, size, block_hashes):
+    def commit_file(self, path, size, block_hashes, base_etag):
+        self.commits.append((path, base_etag))
         missing = self.missing_blocks(block_hashes)
         if missing:
             raise AssertionError(f"commit with missing blocks: {missing}")  # server would 409
-        self.recipes[path] = {"path": path, "size": size, "block_hashes": block_hashes}
-        return self.recipes[path]
+        new_etag = _etag(block_hashes)
+        existing = self.recipes.get(path)
+        # mirror the server's etag compare-and-swap (incl. the retry/target fold)
+        if base_etag is None:
+            if existing is not None and existing["etag"] != new_etag:
+                raise PreconditionFailed(path)
+        elif existing is None or existing["etag"] not in (base_etag, new_etag):
+            raise PreconditionFailed(path)
+        self.recipes[path] = {"path": path, "size": size,
+                              "block_hashes": block_hashes, "etag": new_etag}
+        return new_etag
 
     def list_files(self):
         return [{"path": p} for p in self.recipes]
 
     def get_recipe(self, path):
-        return self.recipes[path]
+        r = self.recipes[path]
+        return r, r["etag"]
 
 
 @pytest.fixture
@@ -71,6 +89,62 @@ def test_push_skips_unchanged_file(setup):
     (folder / "a.txt").write_bytes(b"hello")
     engine.push()
     assert engine.push() == []
+
+
+def test_push_of_a_new_file_sends_no_base_etag(setup):
+    # a file the index has never seen commits as a create (base_etag None -> If-None-Match: *)
+    engine, api, folder = setup
+    (folder / "a.txt").write_bytes(b"hello")
+    engine.push()
+    assert api.commits == [("/a.txt", None)]
+
+
+def test_push_of_an_edited_file_sends_its_stored_base_etag(setup):
+    # a second edit commits as an update off the etag the first push stored
+    engine, api, folder = setup
+    f = folder / "a.txt"
+    f.write_bytes(b"hello")
+    engine.push()
+    first_etag = api.recipes["/a.txt"]["etag"]
+    f.write_bytes(b"hello world")
+    engine.push()
+    assert api.commits[-1] == ("/a.txt", first_etag)
+
+
+def test_push_reconciles_after_a_conflict_and_our_bytes_win(setup):
+    # another device committed this path first (index has no base -> we try to create).
+    # the create conflicts; reconcile refetches the etag and retries as an update.
+    engine, api, folder = setup
+    for h, b in chunker.split(b"theirs"):
+        api.blocks[h] = b
+    theirs = [h for h, _ in chunker.split(b"theirs")]
+    api.recipes["/a.txt"] = {"path": "/a.txt", "size": 6,
+                             "block_hashes": theirs, "etag": _etag(theirs)}
+    (folder / "a.txt").write_bytes(b"ours")
+
+    pushed = engine.push()
+
+    assert pushed == ["/a.txt"]
+    assert api.recipes["/a.txt"]["block_hashes"] == [h for h, _ in chunker.split(b"ours")]
+    # a create that conflicted, then a reconcile retry off the current etag
+    assert api.commits == [("/a.txt", None), ("/a.txt", _etag(theirs))]
+
+
+def test_push_gives_up_when_the_reconcile_retry_also_conflicts(setup):
+    # a second racer squeezes into the window: reconcile's retry conflicts too -> abort loudly
+    engine, api, folder = setup
+    for h, b in chunker.split(b"theirs"):
+        api.blocks[h] = b
+    theirs = [h for h, _ in chunker.split(b"theirs")]
+    api.recipes["/a.txt"] = {"path": "/a.txt", "size": 6,
+                             "block_hashes": theirs, "etag": _etag(theirs)}
+    (folder / "a.txt").write_bytes(b"ours")
+    # a different winner lands between our refetch and retry: the etag we get back is
+    # already stale, so the retry's precondition fails too.
+    api.get_recipe = lambda path: ({"path": path, "block_hashes": []}, "stale")
+
+    with pytest.raises(PreconditionFailed):
+        engine.push()
 
 
 def test_push_only_uploads_missing_blocks(setup):
@@ -141,8 +215,9 @@ def test_sync_returns_pushed_and_pulled(setup):
     # a remote file placed directly on the server
     for h, b in chunker.split(b"remote"):
         api.blocks[h] = b
+    remote_hashes = [h for h, _ in chunker.split(b"remote")]
     api.recipes["/remote.txt"] = {"path": "/remote.txt", "size": 6,
-                                  "block_hashes": [h for h, _ in chunker.split(b"remote")]}
+                                  "block_hashes": remote_hashes, "etag": _etag(remote_hashes)}
     result = engine.sync()
     assert "/local.txt" in result["pushed"]
     assert "/remote.txt" in result["pulled"]
@@ -184,6 +259,7 @@ def test_local_path_rejects_a_symlinked_escape(setup, tmp_path):
 
 def test_pull_aborts_on_an_unsafe_server_path(setup):
     engine, api, _ = setup
-    api.recipes["/../evil.txt"] = {"path": "/../evil.txt", "size": 0, "block_hashes": []}
+    api.recipes["/../evil.txt"] = {"path": "/../evil.txt", "size": 0,
+                                   "block_hashes": [], "etag": _etag([])}
     with pytest.raises(ValueError, match="escapes the sync folder"):
         engine.pull()

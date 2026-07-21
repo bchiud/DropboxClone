@@ -7,6 +7,10 @@ server's get_current_user.
 import httpx
 
 
+class PreconditionFailed(Exception):
+    """Commit rejected: the file moved since we last synced it (HTTP 412)."""
+
+
 class ApiClient:
     def __init__(self, base_url: str, token: str | None = None, transport=None):
         # transport is an injection seam for tests (httpx.MockTransport).
@@ -76,23 +80,26 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()["urls"]
 
-    def commit_file(self, path: str, size: int, block_hashes: list[str]) -> dict:
+    def commit_file(self, path: str, size: int, block_hashes: list[str], base_etag: str | None) -> str:
+        precondition = ({"If-None-Match": "*"} if base_etag is None else {"If-Match": f'"{base_etag}"'})
         resp = self._http.post(
             "/files/commit",
             json={"path": path, "size": size, "block_hashes": block_hashes},
-            headers=self._auth(),
+            headers={**self._auth(), **precondition},
         )
+        if resp.status_code == 412:
+            raise PreconditionFailed(path)
         resp.raise_for_status()
-        return resp.json()
+        return resp.headers["ETag"].strip('"')
 
-    def get_recipe(self, path: str) -> dict:
+    def get_recipe(self, path: str) -> tuple[dict, str]:
         resp = self._http.get(
             "/files/recipe",
             params={"path": path},
             headers=self._auth(),
         )
         resp.raise_for_status()
-        return resp.json()
+        return resp.json(), resp.headers["ETag"].strip('"')
 
     # --- block xfer ---
 

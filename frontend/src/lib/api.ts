@@ -128,6 +128,7 @@ export interface FileSummary {
   path: string;
   size: number;
   updated_at: string;
+  etag: string;
 }
 
 export interface Recipe {
@@ -146,13 +147,18 @@ export async function commit(
   name: string,
   size: number,
   block_hashes: string[],
-): Promise<void> {
+  baseEtag?: string,
+): Promise<string> {
   const path = "/" + name;
-  await request("/files/commit", {
+  const precondition: Record<string, string> = baseEtag
+    ? { "If-Match": `"${baseEtag}"` }
+    : { "If-None-Match": "*" };
+  const res = await request("/files/commit", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...precondition },
     body: JSON.stringify({ path, size, block_hashes }),
   });
+  return res.headers.get("ETag")?.replace(/"/g, "") ?? "";
 }
 
 export async function recipe(path: string, owner?: string): Promise<Recipe> {
@@ -160,8 +166,10 @@ export async function recipe(path: string, owner?: string): Promise<Recipe> {
   url.searchParams.set("path", path);
   if (owner) url.searchParams.set("owner", owner);
   const res = await request(url.toString());
-  const data = (await res.json()) as Recipe;
-  return data;
+  return {
+    ...(await res.json()),
+    etag: res.headers.get("ETag")?.replace(/"/g, ""),
+  };
 }
 
 export async function deleteFile(path: string): Promise<void> {

@@ -13,28 +13,24 @@ import {
   Skeleton,
   Stack,
   Tooltip,
-  Typography,
+  Typography
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { connectChanges } from "./lib/changes";
 import {
+  ApiError,
   commit,
   deleteFile,
   downloadUrls,
+  type FileSummary,
   listFiles,
   missingBlocks,
   recipe,
-  uploadUrls,
-  type FileSummary,
+  uploadUrls
 } from "./lib/api";
 import { chunkFile } from "./lib/crypto";
 import { assembleBlocks, saveBlob } from "./lib/download";
-import {
-  displayPath,
-  downloadName,
-  formatSize,
-  middleTruncate,
-} from "./lib/format";
+import { displayPath, downloadName, formatSize, middleTruncate } from "./lib/format";
 import { SharePanel } from "./shares";
 
 export function FileList() {
@@ -82,7 +78,20 @@ export function FileList() {
         }),
       );
 
-      await commit(file.name, file.size, allHashes); // record the recipe
+      const existing = files.find((f) => f.path === "/" + file.name);
+      try {
+        await commit(file.name, file.size, allHashes, existing?.etag); // record the recipe; etag => update, undefined => create
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 412) {
+          setError(
+            "This file changed in another session — reload and try again.",
+          );
+          await refresh(); // pull the new etag so the retry can succeed
+          return;
+        }
+        throw e;
+      }
+
       await refresh(); // reload the list
     } catch {
       setError("Upload failed");

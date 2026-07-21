@@ -14,7 +14,7 @@ block reuse); last-writer-wins (no conflict copies).
 from pathlib import Path
 
 from client import chunker
-from client.api_client import ApiClient
+from client.api_client import ApiClient, PreconditionFailed
 from client.state import LocalIndex
 
 
@@ -67,8 +67,12 @@ class SyncEngine:
                 for h in missing:
                     self._api.put_block(urls[h], block_bytes[h])  # -> B2 directly
 
-            self._api.commit_file(server_path, len(data), hashes)
-            self._index.update(server_path, data)
+            base_etag = self._index.etag(server_path)
+            try:
+                new_etag = self._api.commit_file(server_path, len(data), hashes, base_etag)
+            except PreconditionFailed:
+                new_etag = self._reconcile(server_path, len(data), hashes)
+            self._index.update(server_path, data, new_etag)
             pushed.append(server_path)
         self._index.save()
         return pushed
@@ -78,7 +82,7 @@ class SyncEngine:
         pulled: list[str] = []
         for summary in self._api.list_files():
             server_path = summary["path"]
-            recipe = self._api.get_recipe(server_path)
+            recipe, etag = self._api.get_recipe(server_path)
             hashes = recipe["block_hashes"]
             local = self._local_path(server_path)
 
@@ -93,7 +97,7 @@ class SyncEngine:
             data = self._download_blocks(server_path, hashes)
             local.parent.mkdir(parents=True, exist_ok=True)
             local.write_bytes(data)
-            self._index.update(server_path, data)
+            self._index.update(server_path, data, etag)
             pulled.append(server_path)
         self._index.save()
         return pulled
@@ -107,6 +111,13 @@ class SyncEngine:
                 raise CorruptBlock(h)
             parts.append(block)
         return b"".join(parts)
+
+    def _reconcile(self, path, size, hashes) -> str:
+        # someone committed between our read and our write. Learn the current etag
+        # and retry once as an update — last-writer-wins, our bytes win. A second
+        # race in the tiny window re-raises PreconditionFailed and aborts the run.
+        _, current = self._api.get_recipe(path)
+        return self._api.commit_file(path, size, hashes, current)
 
     def sync(self) -> dict[str, list[str]]:
         return {"pushed": self.push(), "pulled": self.pull()}

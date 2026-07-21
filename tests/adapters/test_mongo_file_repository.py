@@ -8,10 +8,20 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from app.adapters.mongo_file_repository import MongoFileRepository
+from app.domain.recipe import recipe_etag
 from app.models.file import FileRecord, FileSummary
-from app.ports.file_repository import FileRepository
+from app.ports.file_repository import FileRepository, VersionConflict
+
+
+def _record(block_hashes=("h",)):
+    bh = list(block_hashes)
+    return FileRecord(
+        owner="u", path="/a.txt", size=5,
+        block_hashes=bh, updated_at=datetime.now(UTC), etag=recipe_etag(bh),
+    )
 
 
 @pytest.fixture
@@ -25,17 +35,54 @@ def test_is_a_file_repository(repo):
     assert isinstance(r, FileRepository)
 
 
-def test_save_dumps_model_and_upserts_with_identity_filter(repo):
+def test_create_inserts_the_record(repo):
+    # expected_etag=None means "I believe this is new" -> plain insert
     r, col = repo
-    record = FileRecord(
-        owner="u", path="/a.txt", size=5,
-        block_hashes=["h"], updated_at=datetime.now(UTC),
-    )
-    r.save(record)
+    record = _record()
+    r.save(record, expected_etag=None)
+    col.insert_one.assert_called_once_with(record.model_dump())
+    col.replace_one.assert_not_called()
+
+
+def test_create_on_duplicate_with_same_content_is_idempotent(repo):
+    # a retried/concurrent create of identical content is swallowed, not raised
+    r, col = repo
+    record = _record()
+    col.insert_one.side_effect = DuplicateKeyError("dup")
+    col.find_one.return_value = {"etag": record.etag}
+    r.save(record, expected_etag=None)  # no raise
+
+
+def test_create_on_duplicate_with_different_content_conflicts(repo):
+    r, col = repo
+    record = _record()
+    col.insert_one.side_effect = DuplicateKeyError("dup")
+    col.find_one.return_value = {"etag": "someone-elses-etag"}
+    with pytest.raises(VersionConflict):
+        r.save(record, expected_etag=None)
+
+
+def test_update_uses_conditional_cas_filter(repo):
+    # the precondition: replace only if current etag is the base I read OR already
+    # the target (the retry/parallel-write fold), and never upsert.
+    r, col = repo
+    record = _record(["h1", "h2"])
+    col.replace_one.return_value = MagicMock(matched_count=1)
+    r.save(record, expected_etag="base-etag")
     kwargs = col.replace_one.call_args.kwargs
-    assert kwargs["filter"] == {"owner": "u", "path": "/a.txt"}
-    assert kwargs["replacement"] == record.model_dump()  # model -> dict
-    assert kwargs["upsert"] is True
+    assert kwargs["filter"] == {
+        "owner": "u", "path": "/a.txt",
+        "etag": {"$in": ["base-etag", record.etag]},
+    }
+    assert kwargs["replacement"] == record.model_dump()
+    assert kwargs["upsert"] is False
+
+
+def test_update_raises_when_precondition_matches_nothing(repo):
+    r, col = repo
+    col.replace_one.return_value = MagicMock(matched_count=0)
+    with pytest.raises(VersionConflict):
+        r.save(_record(), expected_etag="stale-etag")
 
 
 def test_get_returns_file_record(repo):
@@ -43,6 +90,7 @@ def test_get_returns_file_record(repo):
     col.find_one.return_value = {
         "owner": "u", "path": "/a.txt", "size": 5,
         "block_hashes": ["h1"], "updated_at": datetime.now(UTC),
+        "etag": recipe_etag(["h1"]),
         "_id": "ignored-by-pydantic",
     }
     got = r.get("u", "/a.txt")
@@ -75,7 +123,8 @@ def test_delete_returns_false_when_nothing_matched(repo):
 def test_list_for_owner_projects_and_returns_summaries(repo):
     r, col = repo
     col.find.return_value = iter([
-        {"owner": "u", "path": "/a.txt", "size": 5, "updated_at": datetime.now(UTC)},
+        {"owner": "u", "path": "/a.txt", "size": 5,
+         "updated_at": datetime.now(UTC), "etag": recipe_etag(["h"])},
     ])
     result = r.list_for_owner("u")
     args = col.find.call_args.args

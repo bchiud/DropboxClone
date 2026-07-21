@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.application.file_service import BlockNotInFile
 from app.dependencies import get_file_service, get_share_service
+from app.domain.recipe import recipe_etag
 from app.main import app
 from app.models.file import FileRecord
 
@@ -25,7 +26,8 @@ class FakeFileService:
     def get_recipe(self, owner, path):
         if path == "/known.txt":
             return FileRecord(owner=owner, path=path, size=3,
-                              block_hashes=["h1", "h2"], updated_at=datetime.now(UTC))
+                              block_hashes=["h1", "h2"], updated_at=datetime.now(UTC),
+                              etag=recipe_etag(["h1", "h2"]))
         raise FileNotFoundError(path)
 
     def download_urls(self, owner, path, hashes):
