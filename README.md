@@ -849,3 +849,19 @@ volume grows.
 - File versioning (conflict copies).
 - Refresh-token rotation (currently non-rotating).
 - httpOnly-cookie token storage (currently `localStorage`).
+- **Resource limits & quotas.** There's no cap on what a client can ask for or
+  store — deliberately deferred as abuse-hardening / product policy, not core
+  architecture (the data plane already scales; bytes bypass the app server). Three
+  independent, well-understood knobs, none in place:
+    - **Request shape** — `BlockHashesRequest.hashes` and `CommitFileRequest.block_hashes`
+      have no length bound, so a giant `hashes` list is an amplification vector (one
+      request → *N* B2 HEADs, or an unbounded Mongo recipe doc). Closable at the
+      validation boundary with a Pydantic `Field(max_length=…)` → automatic `422`.
+    - **Bytes per upload** — the presigned **PUT** carries no size limit, so a client
+      can PUT arbitrary bytes (and never commit, orphaning them). The real fix is a
+      presigned **POST** with a `content-length-range` policy S3 enforces — pending
+      confirmation that B2's S3 API honors POST Object; otherwise a sweep in
+      `scripts/audit_storage.py` reaps over-size/orphaned blocks after the fact.
+    - **Per-user storage quota** — no running per-owner byte total, so nothing rejects
+      the *N*-th GB. Needs a counter keyed on `owner` (logical sum of file sizes is the
+      cheap first cut; physical/deduped needs per-block reference counting).
