@@ -528,10 +528,20 @@ server "changed" ──▶ ws_listener ──▶ SyncEngine.pull()   /files/reci
   commit.
 - **`push`** uploads only the blocks the server reports `missing`, then commits the
   recipe with `If-Match: <stored etag>` (or `If-None-Match: *` for a new file). On a
-  `412`, `_reconcile` refetches the current etag and retries once — last-writer-wins.
+  `412`, `_reconcile` saves the server's version as `name (conflicted copy).ext`, then
+  retries once off the current etag, so our bytes take the path and theirs survive in the copy.
 - **`pull`** downloads a differing file's blocks from B2, **re-verifies** each
   (`sha256(block) == hash`) before reassembling — so a corrupt/poisoned block can
-  never silently corrupt a file.
+  never silently corrupt a file. It **never overwrites a local edit that `push` hasn't
+  sent yet** (local content differs from what `LocalIndex` last synced). If the server
+  changed that file too, it saves the server's version beside it as
+  `name (conflicted copy).ext`, which the next `push` uploads, so both edits survive.
+- **Deletes sync both ways**, using `LocalIndex` as the last-synced state. A path in
+  the index but missing on disk was deleted locally, so `push` calls `DELETE /files`
+  (a `404` counts as done). A path in the index but missing from the server was
+  deleted remotely, so `pull` removes the local copy, unless it has an unpushed edit,
+  which survives and is re-created on the next `push`. An edit made on another device
+  wins over a local delete that `push` hasn't sent yet.
 - **`watcher`** (watchdog) fires `push()` on any file event.
 - **`ws_listener`** holds a WebSocket to `/ws` and fires `pull()` on every server
   `"changed"` push — plus once on (re)connect, to reconcile anything missed while
@@ -542,9 +552,13 @@ server "changed" ──▶ ws_listener ──▶ SyncEngine.pull()   /files/reci
 - **No pull-side delta** — pull re-downloads a differing file's blocks in full,
   with no local block reuse. (It *does* skip files whose local blocks already
   match the recipe.)
-- **Last-writer-wins on conflict** — concurrent commits are now *detected* (the
-  server's etag CAS returns `412`, so a blind overwrite is no longer possible), but
-  they're *resolved* by having the loser retry and win. No conflict copies yet.
+- **Conflicts resolve to copies, not merges** — when two devices edit the same file,
+  both versions survive (one at the path, one as a `(conflicted copy)`), whether the
+  conflict surfaces in `pull` or as a `412` in `push`. Merging them is left to the user.
+- **A sent delete beats a concurrent edit** — once `push` has sent a delete, an edit
+  another device commits around the same time is lost: `DELETE /files` takes no
+  `If-Match`, unlike `commit`. Adding one (and a 412 → re-download path in the client)
+  would make deletes as safe as edits.
 
 ---
 
@@ -865,10 +879,12 @@ volume grows.
   also expiring. Authorization never touches storage. Revocation closes the read
   window in 5 minutes (`s3_url_ttl_seconds`), bounded below by download speed.
 - **File deletion** — owner-scoped, cascades to grants and links before the recipe.
+  The sync client propagates deletes in both directions.
 - **Optimistic concurrency** — every file carries an `etag = sha256(recipe)`; `commit`
   is an `If-Match`/`If-None-Match` conditional write (single-doc CAS), so concurrent
   writers get `412` instead of silently clobbering. Both clients send the precondition
-  and reconcile on conflict; identical re-commits fold into a no-op.
+  and reconcile on conflict; identical re-commits fold into a no-op. The sync client
+  keeps the other side's version as a `(conflicted copy)`, so neither edit is lost.
 - **Block index** — a Mongo `(owner, hash)` collection (`BlockIndex` port) makes
   `/blocks/missing` a single `$in` query instead of one B2 `HEAD` per hash; `commit`
   verifies only not-yet-indexed blocks in B2, keeping the index a strict subset of B2.
@@ -895,10 +911,8 @@ volume grows.
 
 **Hardening backlog:**
 
-- Conflict copies (concurrent writes are now *detected* via the etag CAS → `412`;
-  resolution is still last-writer-wins — the richer step is writing the loser's
-  version alongside the winner's instead of retrying over it). File versioning
-  (keeping prior recipes) is the natural extension.
+- File versioning (keeping prior recipes), the natural extension of conflict copies:
+  any overwritten version stays recoverable, not just the ones a conflict caught.
 - **Auth hardening.** Deferred as operational/feature security, not architecture —
   the auth *model* (stateless JWT + bcrypt + a `jti`-allowlisted refresh token) is in
   place; these are policy knobs layered on top:

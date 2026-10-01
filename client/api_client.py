@@ -92,6 +92,16 @@ class ApiClient:
         resp.raise_for_status()
         return resp.headers["ETag"].strip('"')
 
+    def delete_file(self, path: str) -> None:
+        resp = self._http.delete(
+            "/files",
+            params={"path": path},
+            headers=self._auth(),
+        )
+        if resp.status_code == 404:
+            return  # already gone (another device deleted it first): the goal is met, so a retry stays safe
+        resp.raise_for_status()
+
     def get_recipe(self, path: str) -> tuple[dict, str]:
         resp = self._http.get(
             "/files/recipe",

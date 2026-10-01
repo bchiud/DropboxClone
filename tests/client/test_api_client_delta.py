@@ -90,3 +90,23 @@ def test_get_block_returns_bytes_without_auth_header():
         assert "Authorization" not in req.headers
         return httpx.Response(200, content=b"blockdata")
     assert make_client(handler).get_block("https://b2/presigned-get") == b"blockdata"
+
+
+def test_delete_file_sends_path_as_query_with_auth():
+    def handler(req):
+        assert req.method == "DELETE"
+        assert req.url.path == "/files"
+        assert req.url.params.get("path") == "/a.txt"
+        assert req.headers["Authorization"] == "Bearer tok"
+        return httpx.Response(204)
+    make_client(handler).delete_file("/a.txt")
+
+
+def test_delete_file_treats_404_as_already_deleted():
+    # another device deleted it first: the delete's goal is met, so it must not fail the sync
+    make_client(lambda req: httpx.Response(404, json={"detail": "File not found"})).delete_file("/a.txt")
+
+
+def test_delete_file_raises_on_other_errors():
+    with pytest.raises(httpx.HTTPStatusError):
+        make_client(lambda req: httpx.Response(500)).delete_file("/a.txt")

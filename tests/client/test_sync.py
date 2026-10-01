@@ -64,6 +64,10 @@ class FakeApi:
         r = self.recipes[path]
         return r, r["etag"]
 
+    def delete_file(self, path):
+        # mirrors DELETE /files?path=…: removes the recipe (blocks stay, like the real server)
+        self.recipes.pop(path, None)
+
 
 @pytest.fixture
 def setup(tmp_path):
@@ -128,6 +132,8 @@ def test_push_reconciles_after_a_conflict_and_our_bytes_win(setup):
     assert api.recipes["/a.txt"]["block_hashes"] == [h for h, _ in chunker.split(b"ours")]
     # a create that conflicted, then a reconcile retry off the current etag
     assert api.commits == [("/a.txt", None), ("/a.txt", _etag(theirs))]
+    # ...and their version wasn't thrown away: it's kept locally as a conflict copy
+    assert (folder / "a (conflicted copy).txt").read_bytes() == b"theirs"
 
 
 def test_push_gives_up_when_the_reconcile_retry_also_conflicts(setup):

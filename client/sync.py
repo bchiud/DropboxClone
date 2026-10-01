@@ -8,8 +8,20 @@ pull()  server -> local : fetch the recipe, download its blocks (straight from B
 Only changed *blocks* cross the network, and file bytes never pass through the
 app server — they go directly to/from object storage via presigned URLs.
 
+Conflicts: when both sides edited a file, neither edit is lost. pull never
+overwrites a local edit that push() hasn't sent yet, and saves the server's version
+as a "(conflicted copy)" beside it; push's 412 reconcile does the same before
+retrying over the server's version. The next push uploads the copy.
+
+Deletes sync both ways through LocalIndex (the last-synced state): a path in the
+index but gone from disk was deleted locally, so push deletes it on the server; a
+path in the index but gone from the server was deleted remotely, so pull deletes the
+local copy unless it has an unpushed edit (which then survives as a new file). An
+edit made elsewhere wins over a local delete that push hasn't sent yet.
+
 Limitations (v1): pull downloads a differing file's blocks in full (no local
-block reuse); last-writer-wins (no conflict copies).
+block reuse); a delete that push HAS sent wins over a concurrent edit elsewhere
+(the server's DELETE takes no If-Match).
 """
 from pathlib import Path
 
@@ -74,22 +86,47 @@ class SyncEngine:
                 new_etag = self._reconcile(server_path, len(data), hashes)
             self._index.update(server_path, data, new_etag)
             pushed.append(server_path)
+
+        # local deletes: synced before (in the index) but gone from disk now
+        for server_path in sorted(self._index.known_paths()):
+            if not self._local_path(server_path).exists():
+                self._api.delete_file(server_path)
+                self._index.remove(server_path)
+                pushed.append(server_path)
         self._index.save()
         return pushed
 
     # --- pull: recipe -> download blocks (verify) -> reassemble ---
     def pull(self) -> list[str]:
         pulled: list[str] = []
+        known = self._index.known_paths()  # what we'd synced before this pull
+        server_paths: set[str] = set()
         for summary in self._api.list_files():
             server_path = summary["path"]
+            server_paths.add(server_path)
             recipe, etag = self._api.get_recipe(server_path)
             hashes = recipe["block_hashes"]
             local = self._local_path(server_path)
 
-            # skip download if local content already matches the recipe
+            # deleted locally but push() hasn't sent the delete yet: don't download it again. If the server
+            # changed it since (etag moved), fall through and download it: the edit wins over the delete.
+            if not local.exists() and server_path in known and etag == self._index.etag(server_path):
+                continue
+
             if local.exists():
-                local_hashes = [h for h, _ in chunker.split(local.read_bytes())]
-                if local_hashes == hashes:
+                local_bytes = local.read_bytes()
+                # skip download if local content already matches the recipe
+                if [h for h, _ in chunker.split(local_bytes)] == hashes:
+                    continue
+                # local content differs from what we last synced: an edit push() hasn't sent yet.
+                # Never overwrite it. If the server changed too, both sides edited -> keep the server's
+                # version as a conflict copy beside ours; the next push uploads it, so neither edit is lost.
+                if self._index.is_changed(server_path, local_bytes):
+                    if etag != self._index.etag(server_path):
+                        data = self._download_blocks(server_path, hashes)
+                        copy = self._conflict_copy_path(local, data)
+                        copy.write_bytes(data)
+                        pulled.append(self._server_path(copy))
                     continue
 
             # (re-)downloads whole file
@@ -99,6 +136,15 @@ class SyncEngine:
             local.write_bytes(data)
             self._index.update(server_path, data, etag)
             pulled.append(server_path)
+
+        # server-side deletes: synced before, gone from the server now
+        for server_path in sorted(known - server_paths):
+            local = self._local_path(server_path)
+            if local.exists() and not self._index.is_changed(server_path, local.read_bytes()):
+                local.unlink()
+                pulled.append(server_path)
+            # an unpushed local edit survives: with no index entry, the next push re-creates the file
+            self._index.remove(server_path)
         self._index.save()
         return pulled
 
@@ -112,11 +158,28 @@ class SyncEngine:
             parts.append(block)
         return b"".join(parts)
 
+    @staticmethod
+    def _conflict_copy_path(local: Path, data: bytes) -> Path:
+        # "a (conflicted copy).txt", then "a (conflicted copy 2).txt", ... — reusing a copy that already holds
+        # these bytes, so repeated pulls during the same conflict don't pile up duplicates
+        n = 1
+        while True:
+            label = "conflicted copy" if n == 1 else f"conflicted copy {n}"
+            copy = local.with_name(f"{local.stem} ({label}){local.suffix}")
+            if not copy.exists() or copy.read_bytes() == data:
+                return copy
+            n += 1
+
     def _reconcile(self, path, size, hashes) -> str:
-        # someone committed between our read and our write. Learn the current etag
-        # and retry once as an update — last-writer-wins, our bytes win. A second
-        # race in the tiny window re-raises PreconditionFailed and aborts the run.
-        _, current = self._api.get_recipe(path)
+        # someone committed between our read and our write. Keep their version as a
+        # conflict copy beside ours (the next push uploads it), then retry once as an
+        # update off the current etag, so our bytes take the path and theirs survive in
+        # the copy. A second race in the tiny window re-raises PreconditionFailed and
+        # aborts the run.
+        recipe, current = self._api.get_recipe(path)
+        theirs = self._download_blocks(path, recipe["block_hashes"])
+        local = self._local_path(path)
+        self._conflict_copy_path(local, theirs).write_bytes(theirs)
         return self._api.commit_file(path, size, hashes, current)
 
     def sync(self) -> dict[str, list[str]]:
