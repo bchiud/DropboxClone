@@ -42,7 +42,7 @@ def main(argv=None):
     observer = watch(engine, args.folder)
     print(f"watching {args.folder} + real-time listening — Ctrl-C to stop")
     try:
-        asyncio.run(listen(args.server, api._token, engine))
+        asyncio.run(listen(args.server, api, engine))
     except KeyboardInterrupt:
         pass
     finally:

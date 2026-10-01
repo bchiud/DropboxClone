@@ -545,7 +545,13 @@ server "changed" ──▶ ws_listener ──▶ SyncEngine.pull()   /files/reci
 - **`watcher`** (watchdog) fires `push()` on any file event.
 - **`ws_listener`** holds a WebSocket to `/ws` and fires `pull()` on every server
   `"changed"` push — plus once on (re)connect, to reconcile anything missed while
-  it was disconnected. It reconnects on its own every 3s if the socket drops.
+  it was disconnected. It reconnects on its own every 3s if the socket drops, reading
+  the current access token on each attempt; if the handshake is rejected (`403`, an
+  expired token), it refreshes the token first.
+- **Token refresh** — access tokens live 60 minutes, so `ApiClient` keeps the refresh
+  token from `login()`. Any protected call that gets a `401` refreshes the access token
+  and retries once, keeping its own headers (e.g. `If-Match`). If the refresh token has
+  expired too (7 days), the client stops and needs a fresh login.
 
 **v1 limitations** (documented in `sync.py`):
 
@@ -889,7 +895,8 @@ volume grows.
   `/blocks/missing` a single `$in` query instead of one B2 `HEAD` per hash; `commit`
   verifies only not-yet-indexed blocks in B2, keeping the index a strict subset of B2.
 - **Refresh tokens** — `jti` allowlist with TTL reap; `typ`-guarded against
-  cross-use; the web session survives reload and auto-refreshes on a 401.
+  cross-use; the web session survives reload and auto-refreshes on a 401, and so does
+  the sync client (HTTP calls and WebSocket reconnects).
 - **Web UI** — React + Vite: tabbed "Your files" / "Shared with you", upload,
   hash-verified download, delete, full sharing, no-auth public download page.
 - **Indexes** — unique on `username`, `jti`, `(owner, path)`, the grant triple, and
